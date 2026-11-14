@@ -1,0 +1,68 @@
+name: Release
+
+# Push a tag like v1.0.0 (or run manually) to build the Windows installer and attach it to a GitHub Release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run native
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Package installer
+        run: npx electron-builder --win --x64 --publish never
+      - name: Branded web installer
+        shell: pwsh
+        run: |
+          npm run installer
+          Copy-Item release-installer\Jarvis-Installer.exe release\Jarvis-Installer.exe
+      - name: Checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem release -Filter '*.exe' | ForEach-Object {
+            $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$h  $($_.Name)" | Out-File -Encoding ascii "release\SHA256SUMS.txt" -Append
+          }
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $notes = @"
+          ## Jarvis $tag — Windows
+
+          **Download [Jarvis-Installer.exe](https://github.com/madonchik123/jarvis-agent/releases/latest/download/Jarvis-Installer.exe)** (≈ 0.3 MB) and run it — it fetches the latest version, verifies it and installs (Windows 10/11 x64).
+          Offline / fallback: **Jarvis-Setup-*.exe** (the full package; also used by auto-update).
+          Both are unsigned, so SmartScreen may warn: *More info → Run anyway*.
+
+          On first run Jarvis downloads its on-device speech models (~500 MB) by itself. The AI agent works with free OpenCode models — no key, no sign-up.
+          Setup guide, connectors and everything it can do: see the README.
+
+          **Platform support:** Windows only for now — computer use, OCR and window control rely on Windows APIs. macOS/Linux are not supported yet.
+          "@
+          $assets = @((Get-ChildItem release -Filter '*.exe').FullName) + @((Get-ChildItem release -Filter '*.blockmap').FullName) + @('release\latest.yml', 'release\SHA256SUMS.txt')
+          gh release create $tag $assets --title "Jarvis $tag" --notes "$notes"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-windows
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
+            release/SHA256SUMS.txt
