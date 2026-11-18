@@ -14,6 +14,7 @@ export function VoiceFocusPanel({ compact = false }: { compact?: boolean }) {
   const [error, setError] = useState('')
   const [removeConfirm, setRemoveConfirm] = useState(false)
   const active = useRef(false)
+  const setup = useRef(false)
   useEffect(() => {
     let updated = false, alive = true
     const off = api.on(IPC.voiceFocusChanged, (value: VoiceFocusStatus) => {
@@ -22,12 +23,16 @@ export function VoiceFocusPanel({ compact = false }: { compact?: boolean }) {
       setStatus(value)
     })
     void api.invoke(IPC.voiceFocusGet).then((value) => { if (alive && !updated && value) setStatus(value) })
-    return () => { alive = false; off(); if (active.current) void api.invoke(IPC.voiceFocusCancel) }
+    return () => {
+      alive = false; off()
+      if (active.current) void api.invoke(IPC.voiceFocusCancel)
+      if (setup.current) void api.invoke(IPC.voiceFocusPrepare, false)
+    }
   }, [])
   const recording = status.state === 'recording'
   const busy = pending || recording || status.state === 'loading'
   async function record() {
-    setPending(true); setError(''); active.current = true
+    setPending(true); setError(''); active.current = true; setup.current = true
     try { setStatus(await api.invoke(IPC.voiceFocusRecord)) }
     catch { active.current = false; setError('models') }
     finally { setPending(false) }
@@ -36,7 +41,11 @@ export function VoiceFocusPanel({ compact = false }: { compact?: boolean }) {
     active.current = false; setPending(false)
     setStatus(await api.invoke(IPC.voiceFocusCancel))
   }
-  function close() { if (pending || recording) void cancel(); setOpen(false); setRemoveConfirm(false) }
+  function close() {
+    if (pending || recording) void cancel()
+    setup.current = false; void api.invoke(IPC.voiceFocusPrepare, false)
+    setOpen(false); setRemoveConfirm(false)
+  }
   async function toggle() {
     setError('')
     try { await patch({ voiceFocusEnabled: !enabled }) }
@@ -60,7 +69,7 @@ export function VoiceFocusPanel({ compact = false }: { compact?: boolean }) {
   </>
   if (!compact) return <section className="voice-focus-panel">{content}</section>
   return <>
-    <button className={'chip ' + (status.state === 'ready' ? 'ok' : status.state === 'error' ? 'bad' : '')} onClick={() => setOpen(true)}><Mic size={12} />{t(status.profile ? enabled ? 'focus.on' : 'focus.off' : 'focus.setup')}</button>
+    <button className={'chip ' + (status.state === 'ready' ? 'ok' : status.state === 'error' ? 'bad' : '')} onClick={() => { setup.current = true; setOpen(true); void api.invoke(IPC.voiceFocusPrepare, true).catch(() => setError('microphone')) }}><Mic size={12} />{t(status.profile ? enabled ? 'focus.on' : 'focus.off' : 'focus.setup')}</button>
     {open && <div className="voice-focus-backdrop"><section className="glass voice-focus-panel voice-focus-dialog" role="dialog" aria-modal="true" aria-label={t('focus.title')}>{content}</section></div>}
   </>
 }

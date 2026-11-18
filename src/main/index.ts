@@ -308,10 +308,16 @@ function wireIpc() {
   })
   ipcMain.handle(IPC.toggleListen, () => assistant.toggleListen())
   ipcMain.handle(IPC.voiceFocusGet, () => assistant.speech.voiceFocusStatus())
+  ipcMain.handle(IPC.voiceFocusPrepare, async (_e, on: boolean) => {
+    assistant.speech.prepareVoiceSample(on === true)
+    if (on) await assistant.abortTask()
+    return assistant.speech.voiceFocusStatus()
+  })
   ipcMain.handle(IPC.voiceFocusRecord, async () => {
     if (voiceFocusPreparing || assistant.speech.voiceFocusStatus().state === 'recording') return assistant.speech.voiceFocusStatus()
     const revision = ++voiceFocusRequest
     voiceFocusPreparing = true
+    assistant.speech.prepareVoiceSample(true)
     try {
       await assistant.abortTask()
       await installAssets(['voxlock'])
@@ -321,6 +327,8 @@ function wireIpc() {
         const until = Date.now() + 10_000
         while (!assistant.speech.ready && Date.now() < until && revision === voiceFocusRequest) await new Promise((resolve) => setTimeout(resolve, 100))
       }
+      if (revision !== voiceFocusRequest) return assistant.speech.voiceFocusStatus()
+      await assistant.abortTask() // no late reply or acknowledgement may become part of the recording
       if (revision !== voiceFocusRequest) return assistant.speech.voiceFocusStatus()
       return assistant.speech.beginVoiceSample()
     } finally { voiceFocusPreparing = false }
@@ -494,6 +502,7 @@ async function autoInstall() {
 function wireAssistantEvents() {
   assistant.speech.on('voiceFocus', (status) => broadcast(IPC.voiceFocusChanged, status))
   assistant.speech.on('voiceSampleSaved', () => {
+    assistant.speech.prepareVoiceSample(false)
     applySettings({ voiceFocusEnabled: true })
     // Re-recording an already enabled profile still requires reloading its conditioning state.
     if (assistant.speech.voiceFocusStatus().state === 'loading' && assistant.speech.ready) assistant.speech.restart()

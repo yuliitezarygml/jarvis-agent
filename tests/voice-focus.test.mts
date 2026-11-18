@@ -56,6 +56,25 @@ test('background annotations are ignored while ordinary speech and explicit dict
   for (const text of ['Включи музыку', 'What does music mean?', 'Напиши [Music]', 'scrie [Music]', 'Write (indistinct chatter)']) assert.equal(nonSpeechTranscript(text), false, text)
 })
 
+test('voice setup pauses room commands while still allowing an explicitly started recording', () => {
+  const engine = new SpeechEngine('', () => ({ ...DEFAULT_SETTINGS }))
+  const internal = engine as any
+  const sent: any[] = []
+  internal.worker = { postMessage: (m: any) => sent.push(m), terminate: async () => {} }
+  engine.ready = true
+  engine.prepareVoiceSample(true)
+  engine.feed(new Float32Array(800).buffer)
+  assert.equal(sent.filter((m) => m.type === 'audio').length, 0)
+  internal.focusState = 'recording'
+  engine.feed(new Float32Array(800).buffer)
+  assert.equal(sent.filter((m) => m.type === 'audio').length, 1)
+  internal.focusState = 'off'
+  engine.prepareVoiceSample(false)
+  engine.feed(new Float32Array(800).buffer)
+  assert.equal(sent.filter((m) => m.type === 'audio').length, 2)
+  engine.dispose()
+})
+
 test('recording is explicit, can be cancelled, and ignores a late recording result', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 })
   const base = mkdtempSync(join(tmpdir(), 'jarvis-voice-focus-'))

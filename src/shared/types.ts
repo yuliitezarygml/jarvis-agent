@@ -316,6 +316,7 @@ export const IPC = {
   permissionClose: 'permission:close',
   audioChunk: 'audio:chunk',
   voiceFocusGet: 'voice-focus:get',
+  voiceFocusPrepare: 'voice-focus:prepare',
   voiceFocusChanged: 'voice-focus:changed',
   voiceFocusRecord: 'voice-focus:record',
   voiceFocusCancel: 'voice-focus:cancel',

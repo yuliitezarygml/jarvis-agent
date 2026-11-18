@@ -74,6 +74,7 @@ export class SpeechEngine extends EventEmitter {
   private recordingSeconds = 0
   private recordingTimer: NodeJS.Timeout | null = null
   private focusBeforeRecording: Pick<VoiceFocusStatus, 'state' | 'error'> = { state: 'off' }
+  private voiceSetup = false
   ready = false
 
   constructor(
@@ -105,6 +106,7 @@ export class SpeechEngine extends EventEmitter {
     return { enabled: this.getSettings().voiceFocusEnabled, profile: this.ownerSample, state: this.focusState, seconds: this.recordingSeconds, error: this.focusError }
   }
   private focusChanged() { this.emit('voiceFocus', this.voiceFocusStatus()) }
+  prepareVoiceSample(on: boolean) { this.voiceSetup = on }
 
   beginVoiceSample() {
     if (!this.worker || !this.ready) throw new Error('Speech input is not ready')
@@ -444,6 +446,7 @@ export class SpeechEngine extends EventEmitter {
   // ------------------------------------------------------------------ controls
   feed(buf: ArrayBuffer) {
     if (!this.worker || !this.ready) return
+    if (this.voiceSetup && this.focusState !== 'recording') return
     const samples = new Float32Array(buf)
     this.worker.postMessage({ type: 'audio', samples }, [samples.buffer])
   }
