@@ -268,7 +268,7 @@ function applySettings(patch: Partial<Settings>) {
     assistant.resetFishState()
     assistant.prewarmVoices()
   }
-  if (patch.voiceRu || patch.voiceEn) assistant.prewarmVoices()
+  if (patch.voiceRu || patch.voiceRo || patch.voiceEn) assistant.prewarmVoices()
   assistant.emitStatus()
   return next
 }
@@ -394,7 +394,7 @@ function wireIpc() {
     return out
   })
   ipcMain.handle('voice:preview', async (_e, text: string, voice: string) => {
-    const lang = /[а-яё]/i.test(text) ? 'ru' : 'en'
+    const lang = voice.startsWith('ro_') ? 'ro' : /[а-яё]/i.test(text) ? 'ru' : 'en'
     const wav = await assistant.tts.synth(text, voice, assistant.settings().voiceSpeed, lang)
     toUi('noop')
     hudWin?.webContents.send(IPC.ttsPlay, { id: 'preview-' + Date.now(), wav, fx: assistant.settings().voiceFx, volume: assistant.settings().voiceVolume })

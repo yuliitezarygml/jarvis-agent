@@ -219,8 +219,8 @@ export function SettingsPage() {
                   <Row label={t('settings.theme')}>
                     <Seg value={s.theme} options={[['dark', 'Dark'], ['light', 'Light'], ['system', 'Auto']]} onChange={(v) => patch({ theme: v })} />
                   </Row>
-                  <Row label={t('settings.language')}>
-                    <Seg value={s.interfaceLang} options={[['auto', 'Auto'], ['ru', 'RU'], ['en', 'EN']]} onChange={(v) => patch({ interfaceLang: v })} />
+                  <Row label={t('settings.language')} hint={t('settings.languageHint')}>
+                    <Seg value={s.interfaceLang} options={[['auto', 'Auto'], ['ru', 'RU'], ['ro', 'RO'], ['en', 'EN']]} onChange={(v) => patch({ interfaceLang: v })} />
                   </Row>
                 </Group>
                 <Group title={t('sg.startup')}>
@@ -342,8 +342,8 @@ export function SettingsPage() {
                   <Row label={t('settings.stt')}>
                     <Seg value={s.sttModel} options={[['parakeet-en', 'Parakeet'], ['whisper-base', 'Whisper base'], ['whisper-small', 'small'], ['whisper-turbo', 'turbo']]} onChange={(v) => patch({ sttModel: v })} />
                   </Row>
-                  <Row label={t('settings.sttLang')}>
-                    <Seg value={s.sttLanguage} options={[['auto', 'Auto'], ['ru', 'RU'], ['en', 'EN']]} onChange={(v) => patch({ sttLanguage: v })} />
+                  <Row label={t('settings.sttLang')} hint={t('settings.sttLangHint')}>
+                    <Seg value={s.sttLanguage} options={[['auto', 'Auto'], ['ru', 'RU'], ['ro', 'RO'], ['en', 'EN']]} onChange={(v) => patch({ sttLanguage: v })} />
                   </Row>
                 </Group>
                 <Group title={t('sg.shortcut')}>
@@ -468,6 +468,13 @@ export function SettingsPage() {
                     </Row>
                   </Group>
                 )}
+
+                <Row label={t('settings.voiceRo')}>
+                  <span>Română — Mihai · Piper</span>
+                  <button className="btn sm" onClick={() => preview(s.voiceRo, 'Bună ziua! Vă ascult. Cu ce vă pot ajuta?')}>
+                    {t('settings.preview')}
+                  </button>
+                </Row>
 
                 {s.voiceMode === 'server' && (
                   <details className="fold">

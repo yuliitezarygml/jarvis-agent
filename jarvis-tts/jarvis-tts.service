@@ -1,0 +1,36 @@
+[Unit]
+Description=Jarvis Russian voice on CPU
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jarvis-tts
+Group=jarvis-tts
+WorkingDirectory=/opt/jarvis-tts
+Environment=JARVIS_TTS_HOME=/opt/jarvis-tts
+Environment=JARVIS_TTS_THREADS=4
+Environment=OMP_NUM_THREADS=4
+Environment=MKL_NUM_THREADS=4
+Environment=HF_HOME=/opt/jarvis-tts/cache/huggingface
+Environment=HF_HUB_DISABLE_XET=1
+Environment=HF_HUB_DOWNLOAD_TIMEOUT=120
+Environment=HF_HUB_DISABLE_TELEMETRY=1
+Environment=TOKENIZERS_PARALLELISM=false
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/jarvis-tts/venv/bin/python -m uvicorn server:app --host 192.168.50.38 --port 8080 --workers 1 --no-access-log
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/jarvis-tts/cache
+UMask=0077
+MemoryMax=6G
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

@@ -5,7 +5,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { createHash, randomUUID } from 'crypto'
 import { spawn } from 'child_process'
 import { DEFAULT_SETTINGS } from '../shared/types'
-import type { AppStatus, AssistantState, ChatItem, HighlightTarget, PermissionRequest, Routine, RoutineStep, ToolEvent } from '../shared/types'
+import type { AppStatus, AssistantState, ChatItem, HighlightTarget, Lang, PermissionRequest, Routine, RoutineStep, ToolEvent } from '../shared/types'
+import { detectLanguage, interfaceLanguage, isLang, languageName, romanianDiacritics } from '../shared/language'
 import { phraseScore, normalize, hasSpokenCorrection } from '../shared/textmatch'
 import { SettingsStore, MemoryStore, RoutineStore, ThreadStore, dataDir } from './store'
 import { Opencode } from './opencode'
@@ -68,7 +69,7 @@ export class Assistant extends EventEmitter implements Hub {
   private userSpeaking = false
   private bannerMessage = ''
   private activity = ''
-  private lastLang: 'ru' | 'en' = 'ru'
+  private lastLang: Lang = 'ru'
   private lastSpeechAt = 0
   private controlTimer: NodeJS.Timeout | null = null
   private controlOn = false
@@ -103,6 +104,7 @@ export class Assistant extends EventEmitter implements Hub {
 
   constructor() {
     super()
+    this.lastLang = interfaceLanguage('auto', this.settings().lastInputLanguage, app.getLocale())
     const base = dataDir()
     this.speech = new SpeechEngine(base, () => this.settings())
     this.tts = new Tts(
@@ -237,7 +239,7 @@ export class Assistant extends EventEmitter implements Hub {
 
   prewarmVoices() {
     const s = this.settings()
-    for (const v of [s.voiceRu, s.voiceEn]) this.tts.warm(v)
+    for (const v of [s.voiceRu, s.voiceRo, s.voiceEn]) this.tts.warm(v)
     void this.prepareAcks()
     if (!s.voiceRu.startsWith('xtts:') && !s.voiceEn.startsWith('xtts:') && this.xtts.state !== 'off') this.xtts.stop()
   }
@@ -255,6 +257,7 @@ export class Assistant extends EventEmitter implements Hub {
     const s = this.settings()
     return {
       state: this.state,
+      language: this.lastLang,
       opencode: this.opencode?.status ?? 'starting',
       speech: miss.length ? 'missing-models' : this.speech.ready ? 'ready' : 'loading',
       tts: this.tts.available(s.voiceEn) || this.tts.available(s.voiceRu) ? 'ready' : 'missing-voice',
@@ -272,6 +275,25 @@ export class Assistant extends EventEmitter implements Hub {
 
   emitStatus() {
     this.emit('status', this.status())
+  }
+
+  private local(ru: string, ro: string, en: string): string {
+    return this.lastLang === 'ru' ? ru : this.lastLang === 'ro' ? ro : en
+  }
+
+  private rememberLanguage(text: string, hint = '') {
+    this.lastLang = isLang(hint) ? hint : detectLanguage(text, this.lastLang)
+    if (this.settings().lastInputLanguage !== this.lastLang) this.settingsStore.set({ lastInputLanguage: this.lastLang })
+    this.emitStatus()
+  }
+
+  private voiceFor(lang: Lang) {
+    const s = this.settings()
+    return lang === 'ru' ? s.voiceRu : lang === 'ro' ? s.voiceRo : s.voiceEn
+  }
+
+  private fallbackVoice(lang: Lang) {
+    return lang === 'ru' ? 'ru_RU-denis-medium' : lang === 'ro' ? 'ro_RO-mihai-medium' : 'jarvis-high'
   }
 
   // ---------------------------------------------------------------- speech events
@@ -300,7 +322,7 @@ export class Assistant extends EventEmitter implements Hub {
       case 'conversation':
         if (!e.on && e.reason === 'idle') {
           this.interruptForSpeech()
-          this.emit('chat', { id: uid(), kind: 'system', text: this.lastLang === 'ru' ? 'Разговор завершён после долгой тишины.' : 'Conversation ended after inactivity.', at: Date.now() } satisfies ChatItem)
+          this.emit('chat', { id: uid(), kind: 'system', text: this.local('Разговор завершён после долгой тишины.', 'Conversația s-a încheiat după o pauză lungă.', 'Conversation ended after inactivity.'), at: Date.now() } satisfies ChatItem)
         }
         this.setState(e.on ? 'listening' : 'idle')
         this.emitStatus()
@@ -367,6 +389,7 @@ export class Assistant extends EventEmitter implements Hub {
   // ---------------------------------------------------------------- wake acknowledgement ("Yes, sir?")
   private static readonly ACK = {
     ru: ['Да, сэр?', 'Слушаю, сэр.', 'К вашим услугам.', 'Я весь внимание, сэр.', 'Чем могу помочь?'],
+    ro: ['Da, domnule?', 'Vă ascult.', 'Cu ce vă pot ajuta?'],
     en: ['Yes, sir?', 'At your service.', "I'm listening, sir.", 'How may I help?', 'Yes?']
   }
   /** Real lines from the Jarvis recordings (matched by transcript) — instant and authentic when the cloned voice is on. */
@@ -396,7 +419,7 @@ export class Assistant extends EventEmitter implements Hub {
   private isAckEcho(text: string): boolean {
     const t = normalize(text)
     if (!t || t.length > 40) return false
-    const all = [...Assistant.ACK.ru, ...Assistant.ACK.en, ...Assistant.REAL_ACK]
+    const all = [...Assistant.ACK.ru, ...Assistant.ACK.ro, ...Assistant.ACK.en, ...Assistant.REAL_ACK]
     return all.some((a) => phraseScore(t, a) >= 0.78)
   }
 
@@ -406,8 +429,8 @@ export class Assistant extends EventEmitter implements Hub {
     this.ackPreparing = true
     try {
       const s = this.settings()
-      for (const lang of ['en', 'ru'] as const) {
-        const voice = lang === 'ru' ? s.voiceRu : s.voiceEn
+      for (const lang of ['en', 'ru', 'ro'] as const) {
+        const voice = this.voiceFor(lang)
         if (!this.tts.available(voice)) continue
         if (voice.startsWith('xtts:') && this.xtts.state !== 'ready') continue
         if (lang === 'ru' && (voice.startsWith('xtts:') || voice.startsWith('fish:')) && this.realAckClips().length) continue // real clips are used instead
@@ -439,9 +462,8 @@ export class Assistant extends EventEmitter implements Hub {
     const epoch = this.sayEpoch
     const s = this.settings()
     if (s.wakeAck === 'off' || !s.voiceEnabled || this.speakingDepth > 0) return
-    const lang: 'ru' | 'en' = langHint === 'ru' || langHint === 'en' ? langHint : this.lastLang
-    this.lastLang = lang
-    const voice = lang === 'ru' ? s.voiceRu : s.voiceEn
+    const lang: Lang = isLang(langHint) ? langHint : this.lastLang
+    const voice = this.voiceFor(lang)
     let wav: Buffer | undefined
     let label = ''
     try {
@@ -457,7 +479,7 @@ export class Assistant extends EventEmitter implements Hub {
         wav = this.ackCache.get(`${voice}|${line}`)
         if (!wav) {
           // not pre-built yet (cloned voice still loading): use the fast Piper voice rather than make the user wait
-          const fb = lang === 'ru' ? 'ru_RU-denis-medium' : 'jarvis-high'
+          const fb = this.fallbackVoice(lang)
           if (this.tts.available(fb)) wav = await Promise.race([this.tts.synth(line, fb, s.voiceSpeed, lang), new Promise<undefined>((r) => setTimeout(r, 2500))])
         }
         label = line
@@ -495,7 +517,7 @@ export class Assistant extends EventEmitter implements Hub {
   }
 
   private async onTranscript(text: string, lang: string, viaWake = false) {
-    text = text.trim()
+    text = romanianDiacritics(text.trim())
     const control = conversationControl(text, this.settings().wakePhrases, this.settings().wakeSensitivity)
     if (this.isAckEcho(text)) {
       // Jarvis heard his own "Yes, sir" through the speakers — not a command
@@ -510,12 +532,14 @@ export class Assistant extends EventEmitter implements Hub {
         return
       }
       if (this.isQuestionEcho(text)) return
+      this.rememberLanguage(text, lang)
       this.resolveAsk(text)
       this.setState('thinking')
       return
     }
     this.commandListening = false
     if (!text || text.length < 2) {
+      if (isLang(lang)) this.rememberLanguage(text, lang)
       // only the wake word was said — keep listening for the actual command, and confirm out loud that we heard it
       this.speech.listenFor(this.settings().followupSeconds)
       this.setState('listening')
@@ -548,7 +572,8 @@ export class Assistant extends EventEmitter implements Hub {
 
   private async dispatchCommand(text: string, via: 'voice' | 'text', lang: string, revision: number) {
     this.lastWasVoice = via === 'voice'
-    this.lastLang = lang === 'ru' || /[а-яё]/i.test(text) ? 'ru' : 'en'
+    text = romanianDiacritics(text)
+    this.rememberLanguage(text, lang)
     if (this.speakingDepth > 0) this.stopSpeaking()
     if (this.opencode.isBusy) {
       this.mcp.pause() // a new request supersedes the running one
@@ -567,14 +592,14 @@ export class Assistant extends EventEmitter implements Hub {
       const already = this.speech.conversation
       this.speech.setConversation(true)
       if (!control.topic) {
-        if (!already) void this.say(this.lastLang === 'ru' ? 'Я слушаю, сэр. О чём поговорим?' : "I'm listening, sir. What shall we talk about?")
+        if (!already) void this.say(this.local('Я слушаю, сэр. О чём поговорим?', 'Vă ascult, domnule. Despre ce vorbim?', "I'm listening, sir. What shall we talk about?"))
         return
       }
       text = control.topic
     }
 
     const quick = text.toLowerCase().replace(/[^\p{L}\s]/gu, '').trim()
-    if (/^(стоп|отмена|отмени|отмени команду|хватит|замолчи|stop|cancel|cancel command|abort|enough|never ?mind)$/.test(quick)) {
+    if (/^(стоп|отмена|отмени|отмени команду|хватит|замолчи|stop|cancel|cancel command|abort|enough|never ?mind|oprește|opreste|anulează|anuleaza|anulează comanda|anuleaza comanda|taci)$/.test(quick)) {
       this.interruptForSpeech()
       return
     }
@@ -589,7 +614,7 @@ export class Assistant extends EventEmitter implements Hub {
 
     // instant commands (volume, media keys, desktop) never wait for the model
     const corrected = hasSpokenCorrection(text)
-    const fast = matchFast(text)
+    const fast = this.lastLang === 'ro' ? null : matchFast(text)
     if (fast) {
       try {
         if (fast.kind === 'volume') await this.win.call('volume', { action: fast.action, level: fast.level, step: fast.step })
@@ -625,7 +650,7 @@ export class Assistant extends EventEmitter implements Hub {
       const system = buildSystemExtra({
         memory: this.memory.promptBlock(),
         routines: this.routines.list(),
-        lang: lang === 'ru' || /[а-яё]/i.test(text) ? 'Russian' : 'English',
+        lang: languageName[this.lastLang],
         via,
         screen: displays.join(' + '),
         vision: this.isVision(),
@@ -792,9 +817,9 @@ export class Assistant extends EventEmitter implements Hub {
     this.emit('subtitle', clean)
     if (highlights.length) void this.overlay.show(highlights)
 
-    const lang = detectLang(clean)
-    let voice = lang === 'ru' ? s.voiceRu : s.voiceEn
-    if (!this.tts.available(voice)) voice = lang === 'ru' ? 'ru_RU-denis-medium' : 'jarvis-high' // chosen voice not installed
+    const lang = detectLang(clean, this.lastLang)
+    let voice = this.voiceFor(lang)
+    if (!this.tts.available(voice)) voice = this.fallbackVoice(lang)
     const ok = s.voiceEnabled && this.tts.available(voice)
     this.speakAbort = { aborted: false }
     const token = this.speakAbort
@@ -811,7 +836,7 @@ export class Assistant extends EventEmitter implements Hub {
           // cloned voice not loaded (it unloads when idle / is still starting): kick it off and answer with Piper now
           if (voice.startsWith('xtts:') && this.xtts.state !== 'ready') {
             void this.xtts.ensure().catch(() => {})
-            const fb0 = lang === 'ru' ? 'ru_RU-denis-medium' : 'jarvis-high'
+            const fb0 = this.fallbackVoice(lang)
             if (this.tts.available(fb0)) return this.tts.synth(t, fb0, s.voiceSpeed, lang)
           }
           try {
@@ -823,7 +848,7 @@ export class Assistant extends EventEmitter implements Hub {
               this.fishWarned = true
               this.emit('chat', { id: uid(), kind: 'system', text: '⚠ ' + (e as Error).message + ' — using the local voice', at: Date.now() } satisfies ChatItem)
             }
-            const fb = lang === 'ru' ? 'ru_RU-denis-medium' : 'jarvis-high'
+            const fb = this.fallbackVoice(lang)
             return this.tts.synth(t, fb, s.voiceSpeed, lang)
           }
         }

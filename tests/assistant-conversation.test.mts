@@ -32,6 +32,7 @@ function fixture(t: TestContext) {
     interruption: Promise.resolve(), interruptionContext: '', spokenSentences: [], liveSteps: [],
     askResolve: null, askId: '', askQuestion: '', routinesRunning: 0, controlOn: false,
     pendingConfirms: new Map(), grantedThreads: new Set(), settings: () => ({ ...DEFAULT_SETTINGS }),
+    settingsStore: { set() {} },
     emitStatus() {}, speech, overlay: { clear() {}, setControl: async () => {} },
     mcp: { computer, pause() { computer.cancel() } },
     win: { call: async (name: string, args: any) => { calls.push([name, args]) } },
@@ -72,6 +73,22 @@ test('voice mode activation never queues a competing wake acknowledgement', asyn
   await f.a.onTranscript('Джарвис, давай пообщаемся', 'ru', true)
   assert.equal(f.speech.conversation, true)
   assert.equal(acknowledgements, 0)
+})
+
+test('Romanian request changes and remembers interaction language, and uses a Romanian local reply', async (t) => {
+  const { a, speech } = fixture(t)
+  let saved: any = { ...DEFAULT_SETTINGS, lastInputLanguage: 'ru' }
+  a.settings = () => saved
+  a.settingsStore.set = (patch: any) => { saved = { ...saved, ...patch } }
+  const said: string[] = []
+  a.say = async (text: string) => { said.push(text) }
+  await a.handleCommand('Hai să vorbim, Jarvis', 'voice', 'ro')
+  assert.equal(a.lastLang, 'ro')
+  assert.equal(saved.lastInputLanguage, 'ro')
+  assert.equal(speech.conversation, true)
+  assert.match(said[0], /Vă ascult/)
+  await a.handleCommand('Jarvis, încheie conversația', 'voice', 'ro')
+  assert.equal(speech.conversation, false)
 })
 
 test('speech onset cancels audio and work immediately while preserving microphone capture', async (t) => {

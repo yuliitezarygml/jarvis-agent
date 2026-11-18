@@ -1,11 +1,12 @@
 import { findWake, normalize } from './textmatch'
+import { romanianDiacritics } from './language'
 
 export type ConversationControl = { action: 'start'; topic: string } | { action: 'end' }
 
 /** Match whole requests, including a trailing name, without swallowing the words before it. */
 export function conversationControl(text: string, aliases: string[], sensitivity = 0.6): ConversationControl | null {
   if (/[«»“”"]/.test(text)) return null
-  const raw = text.trim().replace(/^(эй|привет|hey|hello)[,\s]+/i, '')
+  const raw = romanianDiacritics(text.trim()).replace(/^(эй|привет|hey|hello|salut|bună)[,\s]+/i, '')
   const tokens = raw.split(/\s+/)
   const candidates = [raw]
   const first = findWake(raw, aliases, sensitivity, 1)
@@ -16,14 +17,14 @@ export function conversationControl(text: string, aliases: string[], sensitivity
   }
   for (const candidate of candidates) {
     const clean = candidate.replace(/^[,.:;!?\s]+|[,.:;!?\s]+$/g, '')
-    const start = clean.match(/^(?:давай(?:те)?\s+(?:пообщаемся|поговорим|поболтаем)|(?:включи|начни)\s+режим\s+(?:разговора|общения)|let['’]?s\s+(?:talk|chat)|start\s+(?:a\s+)?conversation)(?:\s+(?:про|о|об|about)\s+([\s\S]+))?$/i)
+    const start = clean.match(/^(?:давай(?:те)?\s+(?:пообщаемся|поговорим|поболтаем)|(?:включи|начни)\s+режим\s+(?:разговора|общения)|let['’]?s\s+(?:talk|chat)|start\s+(?:a\s+)?conversation|hai\s+s[ăa]\s+(?:vorbim|discutăm|discutam)|(?:începe|incepe)\s+(?:o\s+)?conversa[țt]ie)(?:\s+(?:про|о|об|about|despre)\s+([\s\S]+))?$/i)
     if (start) return { action: 'start', topic: start[1]?.trim() ?? '' }
-    if (/^(закончим разговор|закончи разговор|заверши разговор|хватит общаться|вернись в режим ожидания|end (?:the )?conversation|stop chatting|go back to standby)$/.test(normalize(clean))) return { action: 'end' }
+    if (/^(закончим разговор|закончи разговор|заверши разговор|хватит общаться|вернись в режим ожидания|end (?:the )?conversation|stop chatting|go back to standby|încheie conversația|incheie conversatia|termină conversația|termina conversatia|revino în așteptare|revino in asteptare)$/.test(normalize(clean))) return { action: 'end' }
   }
   return null
 }
 
-export const conversationPause = (text: string) => /^(подожди|погоди|секунду|дай подумать|сейчас подумаю|wait|one moment|let me think)$/.test(normalize(text))
+export const conversationPause = (text: string) => /^(подожди|погоди|секунду|дай подумать|сейчас подумаю|wait|one moment|let me think|așteaptă|asteapta|un moment|lasă mă să mă gândesc|lasa ma sa ma gandesc)$/.test(normalize(romanianDiacritics(text)))
 
 /** A second line of defence after acoustic echo cancellation; one-word user replies stay available. */
 export class SpeechEchoFilter {

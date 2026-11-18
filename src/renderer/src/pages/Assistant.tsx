@@ -110,7 +110,7 @@ function Message({ item }: { item: ChatItem }) {
     case 'user':
       return (
         <div className="msg user enter">
-          {item.via === 'voice' && <div className="via">🎙 voice</div>}
+          {item.via === 'voice' && <div className="via">🎙 {t('chat.voice')}</div>}
           {item.text}
         </div>
       )
@@ -152,11 +152,11 @@ function Message({ item }: { item: ChatItem }) {
 
 function relTime(ts: number, locale: string) {
   const m = Math.round((Date.now() - ts) / 60000)
-  if (m < 1) return locale === 'ru' ? 'сейчас' : 'now'
+  if (m < 1) return locale === 'ru' ? 'сейчас' : locale === 'ro' ? 'acum' : 'now'
   if (m < 60) return locale === 'ru' ? `${m} мин` : `${m}m`
   const h = Math.round(m / 60)
   if (h < 24) return locale === 'ru' ? `${h} ч` : `${h}h`
-  return new Date(ts).toLocaleDateString(locale === 'ru' ? 'ru-RU' : 'en-GB', { day: 'numeric', month: 'short' })
+  return new Date(ts).toLocaleDateString(locale === 'ru' ? 'ru-RU' : locale === 'ro' ? 'ro-RO' : 'en-GB', { day: 'numeric', month: 'short' })
 }
 
 function ThreadBar({ onProcess }: { onProcess: () => void }) {
@@ -387,7 +387,7 @@ export function AssistantPage() {
 
   const busy = status.state === 'thinking' || status.state === 'speaking'
   const hotkey = settings.hotkey.replace('Control', 'Ctrl')
-  const tries = locale === 'ru' ? ['Джарвис, открой калькулятор', 'Что у меня на экране? Покажи где кнопка настроек', 'Создай команду «Привет»: открой Spotify и скажи доброе утро', 'Запомни, что я работаю над проектом Atlas'] : ['Jarvis, open the calculator', "What's on my screen? Show me the settings button", 'Create a command “Hello”: open Spotify and say good morning', 'Remember that I am working on project Atlas']
+  const tries = locale === 'ru' ? ['Джарвис, открой калькулятор', 'Что у меня на экране? Покажи где кнопка настроек', 'Создай команду «Привет»: открой Spotify и скажи доброе утро', 'Запомни, что я работаю над проектом Atlas'] : locale === 'ro' ? ['Jarvis, deschide calculatorul', 'Ce este pe ecran? Arată-mi butonul de setări', 'Creează o comandă „Salut”: deschide Spotify și spune bună dimineața', 'Ține minte că lucrez la proiectul Atlas'] : ['Jarvis, open the calculator', "What's on my screen? Show me the settings button", 'Create a command “Hello”: open Spotify and say good morning', 'Remember that I am working on project Atlas']
 
   const live = partial && (status.state === 'listening' || status.state === 'wake' || status.state === 'idle') ? partial : subtitle || (status.state === 'thinking' && status.activity ? '⚙ ' + status.activity : '')
 
@@ -410,21 +410,21 @@ export function AssistantPage() {
           <div className="chips">
             <span className={'chip ' + (status.opencode === 'ready' || status.opencode === 'sleeping' ? 'ok' : status.opencode === 'error' ? 'bad' : 'warn')}>
               <i className="dot" />
-              agent · {settings.model.split('/')[1]}
+              {t('home.agent')} · {settings.model.split('/')[1]}
             </span>
             <span className={'chip ' + (status.listeningForWake ? 'ok' : status.speech === 'missing-models' ? 'bad' : 'warn')}>
               <i className="dot" />
-              {status.listeningForWake ? `“${settings.wakePhrases[0] ?? 'jarvis'}”` : status.speech === 'missing-models' ? 'models missing' : 'wake off'}
+              {status.listeningForWake ? `“${settings.wakePhrases[0] ?? 'jarvis'}”` : t(status.speech === 'missing-models' ? 'home.modelsMissing' : 'home.wakeOff')}
             </span>
             {status.controlling && (
               <span className="chip warn">
                 <i className="dot" />
-                {locale === 'ru' ? 'управляю ПК' : 'controlling PC'}
+                {t('home.controlling')}
               </span>
             )}
             <span className={'chip ' + (status.tts === 'ready' ? 'ok' : 'warn')}>
               <i className="dot" />
-              voice
+              {t('home.voice')}
             </span>
           </div>
         </div>

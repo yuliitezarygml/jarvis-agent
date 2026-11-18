@@ -22,15 +22,17 @@ const clock: Clock = {
 }
 
 const words = (text: string) => text.toLowerCase().replace(/ё/g, 'е').replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim()
-const STOP = /^(стоп|отмена|отмени|отмени команду|хватит|замолчи|stop|cancel|cancel command|abort|enough|never mind)$/
-const THINK = /^(подожди|погоди|дай подумать|сейчас подумаю|секунду|wait|one moment|let me think)$/
+const STOP = /^(стоп|отмена|отмени|отмени команду|хватит|замолчи|stop|cancel|cancel command|abort|enough|never mind|oprește|opreste|anulează|anuleaza|anulează comanda|anuleaza comanda|taci)$/
+const THINK = /^(подожди|погоди|дай подумать|сейчас подумаю|секунду|wait|one moment|let me think|așteaptă|asteapta|un moment|lasă mă să mă gândesc|lasa ma sa ma gandesc)$/
 // Deliberately explicit standalone phrases; "готово" can be part of dictated text.
-const FINISH = /^(все выполняй|команда закончена|я закончил команду|end command|execute command)$/
+const FINISH = /^(все выполняй|команда закончена|я закончил команду|end command|execute command|execută comanda|executa comanda|am terminat comanda)$/
 
 /** Conservative local hints, not a claim to understand every unfinished thought. */
 export function needsContinuation(text: string): boolean {
   const t = words(text).replace(/\s+пожалуйста$/, '').replace(/^please\s+/, '')
   if (!t || THINK.test(t)) return true
+  if (/(?:^|\s)(și|si|sau|dar|pentru|cu|în|in|din|la|despre|către|catre)$/.test(t)) return true
+  if (/^(deschide|închide|inchide|caută|cauta|arată|arata|creează|creeaza|șterge|sterge|mută|muta|copiază|copiaza|scrie|trimite|salvează|salveaza|explică|explica)$/.test(t)) return true
   if (/(?:^|\s)(и|или|но|чтобы|потому что|в|во|на|из|с|со|к|ко|от|до|по|про|о|об|для|через|между|нет|точнее|and|or|but|to|from|with|about|into|for|the|a|an|of)$/.test(t)) return true
   if (/^(найди|поищи)(?:\s+(в интернете|в сети|информацию))?$/.test(t)) return true
   return /^(открой|найди|покажи|запусти|включи|выключи|создай|удали|перенеси|перемести|скопируй|напиши|отправь|сохрани|расскажи|объясни|нет|точнее|ну|эм|open|find|show|launch|start|create|delete|move|copy|write|send|save|explain|no|actually)$/.test(t)
@@ -79,8 +81,8 @@ export class CommandBuffer {
     const text = part.text.trim()
     if (!text) return
     const t = words(text)
-    const dictating = /^(напиши|запиши|диктуй|write|type|dictate)(?:\s|$)/i.test(this.text)
-    if (STOP.test(t) && (!dictating || /^(отмени команду|cancel command)$/.test(t))) {
+    const dictating = /^(напиши|запиши|диктуй|write|type|dictate|scrie|dictează|dicteaza)(?:\s|$)/i.test(this.text)
+    if (STOP.test(t) && (!dictating || /^(отмени команду|cancel command|anulează comanda|anuleaza comanda)$/.test(t))) {
       this.cancel()
       this.options.complete(part)
       return
@@ -130,7 +132,7 @@ export class CommandBuffer {
     this.stopTimer = undefined
     const revision = ++this.revision
     if (!this.transcript || this.hearing || this.jobs) return
-    const shortAnswer = this.options.answerMode?.() && /^(да|нет|yes|no)$/.test(words(this.text))
+    const shortAnswer = this.options.answerMode?.() && /^(да|нет|yes|no|da|nu)$/.test(words(this.text))
     const incomplete = this.holding || (!shortAnswer && needsContinuation(this.text))
     const configured = this.options.pauseMs()
     const pause = Number.isFinite(configured) ? Math.min(10_000, Math.max(1000, configured)) : 3500

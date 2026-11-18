@@ -42,7 +42,7 @@ export function normalize(s: string): string {
   return s
     .toLowerCase()
     .replace(/ё/g, 'е')
-    .replace(/[^a-zа-я0-9\s]/g, ' ')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim()
 }

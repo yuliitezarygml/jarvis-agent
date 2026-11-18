@@ -1,3 +1,5 @@
+import { interfaceLanguage } from '../../shared/language'
+import { ro } from './ro'
 export type Dict = Record<string, string>
 
 const en: Dict = {
@@ -19,6 +21,11 @@ const en: Dict = {
   'state.speaking': 'Speaking',
   'state.error': 'Something went wrong',
   'home.hint': 'Say “Jarvis” or press {hotkey}',
+  'home.agent': 'agent', 'home.voice': 'voice', 'chat.voice': 'voice',
+  'home.modelsMissing': 'models missing', 'home.wakeOff': 'wake off', 'home.controlling': 'controlling PC',
+  'settings.voiceRo': 'Romanian voice (local)',
+  'settings.languageHint': 'Auto follows the language of your request (RU/RO/EN) and remembers it between launches.',
+  'settings.sttLangHint': 'Auto uses Whisper to distinguish Russian, Romanian and English. Pinned RU/EN use the fast specialised recognisers.',
   'home.placeholder': 'Ask Jarvis anything, or give an order…',
   'home.empty.title': 'At your service.',
   'home.empty.sub': 'I can see your screen, point at things, control your PC and remember what matters.',
@@ -161,7 +168,7 @@ const en: Dict = {
   'settings.wakePhrases': 'Wake phrases',
   'settings.wakeSens': 'Sensitivity',
   'settings.mic': 'Microphone',
-  'settings.stt': 'English recogniser (Russian always uses GigaAM)',
+  'settings.stt': 'Recognition model',
   'settings.sttLang': 'Recognition language',
   'settings.hotkey': 'Push-to-talk hotkey',
   'settings.ack': 'Say "Yes, sir" when triggered',
@@ -213,7 +220,7 @@ const en: Dict = {
   'prov.restarting': 'Restarting the agent with the new endpoint…',
   'settings.voiceEngine': 'Voice engine',
   'voice.source': 'Where the voice comes from',
-  'voice.source.server': 'The Jarvis voice from our free server — nothing to set up. Sentences are sent to the server and Fish Audio to be spoken.',
+  'voice.source.server': 'Voice from the selected speech server. You can use the shared server or your own server.',
   'voice.source.custom': 'Use your own Fish Audio API key (and any voices you like).',
   'voice.source.local': 'Everything on this PC: Piper (fast, offline) or the cloned voice on an NVIDIA GPU.',
   'voice.mode.server': 'Server (free)',
@@ -300,6 +307,11 @@ const ru: Dict = {
   'state.speaking': 'Говорю',
   'state.error': 'Что-то пошло не так',
   'home.hint': 'Скажите «Джарвис» или нажмите {hotkey}',
+  'home.agent': 'агент', 'home.voice': 'голос', 'chat.voice': 'голос',
+  'home.modelsMissing': 'нет моделей', 'home.wakeOff': 'активация выключена', 'home.controlling': 'управляю ПК',
+  'settings.voiceRo': 'Румынский голос (локальный)',
+  'settings.languageHint': 'Авто следует языку твоего запроса (RU/RO/EN) и сохраняет его между запусками.',
+  'settings.sttLangHint': 'Авто различает русский, румынский и английский через Whisper. Фиксированные RU/EN используют быстрые специализированные распознаватели.',
   'home.placeholder': 'Спросите Джарвиса или дайте команду…',
   'home.empty.title': 'К вашим услугам.',
   'home.empty.sub': 'Я вижу экран, могу показать на нём нужное, управляю ПК и помню важное.',
@@ -442,7 +454,7 @@ const ru: Dict = {
   'settings.wakePhrases': 'Фразы активации',
   'settings.wakeSens': 'Чувствительность',
   'settings.mic': 'Микрофон',
-  'settings.stt': 'Английский распознаватель (русский — всегда GigaAM)',
+  'settings.stt': 'Модель распознавания',
   'settings.sttLang': 'Язык распознавания',
   'settings.hotkey': 'Горячая клавиша',
   'settings.ack': 'Говорить «Да, сэр» при активации',
@@ -494,7 +506,7 @@ const ru: Dict = {
   'prov.restarting': 'Перезапускаю агента с новым endpoint…',
   'settings.voiceEngine': 'Движок голоса',
   'voice.source': 'Откуда берётся голос',
-  'voice.source.server': 'Голос Джарвиса с нашего бесплатного сервера — ничего настраивать не нужно. Фразы отправляются на сервер и в Fish Audio для озвучки.',
+  'voice.source.server': 'Голос с выбранного сервера озвучки. Можно использовать общий сервер или свой.',
   'voice.source.custom': 'Свой API-ключ Fish Audio (и любые голоса).',
   'voice.source.local': 'Всё на этом ПК: Piper (быстро, офлайн) или клон голоса на видеокарте NVIDIA.',
   'voice.mode.server': 'Сервер (бесплатно)',
@@ -562,12 +574,11 @@ const ru: Dict = {
   'ui.send': 'Отправить'
 }
 
-export const dicts = { en, ru }
+export const dicts = { en, ru, ro }
 export type Locale = keyof typeof dicts
 
-export function resolveLocale(pref: string): Locale {
-  if (pref === 'ru' || pref === 'en') return pref
-  return navigator.language.toLowerCase().startsWith('ru') ? 'ru' : 'en'
+export function resolveLocale(pref: string, input = '', system = typeof navigator === 'undefined' ? 'en' : navigator.language): Locale {
+  return interfaceLanguage(pref, input, system)
 }
 
 export function translate(locale: Locale, key: string, vars?: Record<string, string>) {

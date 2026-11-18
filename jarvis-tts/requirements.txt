@@ -1,0 +1,5 @@
+pocket-tts==4.0.1
+silero-stress==1.5
+runorm==1.1
+soundfile==0.14.0
+imageio-ffmpeg==0.6.0
