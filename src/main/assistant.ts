@@ -510,6 +510,7 @@ export class Assistant extends EventEmitter implements Hub {
         if (via === 'voice' && fast.kind !== 'media') void this.say(fast.say[this.lastLang === 'ru' ? 0 : 1])
         return
       } catch (e: any) {
+        routine?.check()
         console.warn('[fast] failed, falling back to the agent:', e?.message || e)
       }
     }
@@ -524,7 +525,7 @@ export class Assistant extends EventEmitter implements Hub {
       try {
         await this.runRoutine(r)
       } finally {
-        this.setState('idle')
+        if (!this.routineRunner.active && !this.opencode.isBusy) this.setState('idle')
       }
       return
     }
@@ -1168,6 +1169,7 @@ export class Assistant extends EventEmitter implements Hub {
       const ended = () => { if (started && !run.signal.aborted) done() }
       const abort = () => {
         cleanup()
+        this.mcp.computer.cancel()
         void this.abortAgent().catch(() => {}).finally(() => reject(new RoutineCancelledError()))
       }
       this.opencode.on('turnStart', start)
@@ -1177,7 +1179,8 @@ export class Assistant extends EventEmitter implements Hub {
         if (!this.opencode.isBusy && !run.signal.aborted) done()
       }, (error) => {
         cleanup()
-        reject(error)
+        if (run.signal.aborted && this.agentAbort) void this.agentAbort.catch(() => {}).finally(() => reject(error))
+        else reject(error)
       })
     })
   }
@@ -1202,7 +1205,7 @@ export class Assistant extends EventEmitter implements Hub {
         }
       }
       const t = setTimeout(() => {
-        p.kill()
+        try { p.kill() } catch {}
         cleanup()
         reject(new Error('timeout'))
       }, timeout)

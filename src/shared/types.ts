@@ -308,7 +308,7 @@ export interface DiagnosticsSnapshot {
   microphone: MicrophoneStatus
   server: TtsServerDiagnostic | null
   synthesis: SynthesisDiagnostic | null
-  lastError: { source: 'tts' | 'microphone' | 'speech'; message: string; at: number } | null
+  lastError: { source: 'tts' | 'microphone' | 'speech' | 'routine'; message: string; at: number } | null
   speech: { state: AppStatus['speech']; asrLoaded: boolean; missingModels: string[] }
   voiceMode: Settings['voiceMode']
   voiceEnabled: boolean

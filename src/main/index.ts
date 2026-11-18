@@ -491,6 +491,7 @@ function wireAssistantEvents() {
   assistant.speech.on('event', (event) => {
     if (event.type === 'error') diagnostics.recordError('speech', event.error)
   })
+  assistant.on('diagnosticError', (event: { source: 'routine'; message: string }) => diagnostics.recordError(event.source, event.message))
   assistant.on('chat', (item) => toUi(IPC.chat, item))
   assistant.on('permission', (r) => {
     pendingPerms.add(r.id)

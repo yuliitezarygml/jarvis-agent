@@ -22,6 +22,14 @@ function releaseMic(stream: MediaStream | null, ctx: AudioContext | null) {
   if (ctx && ctx.state !== 'closed') void ctx.close().catch(() => {})
 }
 
+function retryMic(generation: number) {
+  if (micRetry !== null) clearTimeout(micRetry)
+  micRetry = setTimeout(() => {
+    micRetry = null
+    if (generation === micGeneration) void startMic()
+  }, 4000)
+}
+
 const WORKLET = `
 class Capture extends AudioWorkletProcessor {
   constructor() { super(); this.buf = new Float32Array(800); this.n = 0 }
@@ -65,8 +73,19 @@ async function startMic() {
       releaseMic(stream, ctx)
       return
     }
-    ctx = new AudioContext({ sampleRate: 16000, latencyHint: 'interactive' })
     micStream = stream
+    const tracks = stream.getTracks()
+    const onTrackEnded = () => {
+      if (generation !== micGeneration) return
+      stopMic()
+      reportMicStatus({ state: 'error', deviceId: id, error: 'Microphone disconnected or stopped' })
+      retryMic(micGeneration)
+    }
+    const removeTrackListeners = () => tracks.forEach((track) => track.removeEventListener('ended', onTrackEnded))
+    tracks.forEach((track) => track.addEventListener('ended', onTrackEnded))
+    disconnectMic = removeTrackListeners
+    if (tracks.some((track) => track.readyState === 'ended')) throw new Error('Microphone disconnected or stopped')
+    ctx = new AudioContext({ sampleRate: 16000, latencyHint: 'interactive' })
     micCtx = ctx
     const url = URL.createObjectURL(new Blob([WORKLET], { type: 'text/javascript' }))
     try {
@@ -92,6 +111,7 @@ async function startMic() {
     mute.gain.value = 0
     node.connect(mute).connect(ctx.destination)
     disconnectMic = () => {
+      removeTrackListeners()
       node.port.onmessage = null
       src.disconnect()
       node.disconnect()
@@ -101,14 +121,13 @@ async function startMic() {
   } catch (e) {
     releaseMic(stream, ctx)
     if (generation !== micGeneration) return
+    disconnectMic?.()
+    disconnectMic = null
     micStream = null
     micCtx = null
     console.error('mic failed', e)
     reportMicStatus({ state: 'error', deviceId: id, error: e instanceof Error ? e.message : String(e) })
-    micRetry = setTimeout(() => {
-      micRetry = null
-      if (generation === micGeneration) void startMic()
-    }, 4000)
+    retryMic(generation)
   }
 }
 

@@ -5,7 +5,7 @@ import { EventEmitter } from 'events'
 import type { XttsSidecar } from './xtts'
 import { fishSynth, serverSynth, type FishConfig } from './fish'
 import { resourcePath } from './paths'
-import { diagnosticMessage } from './diagnostics'
+import { synthesisDiagnosticError } from './diagnostics'
 
 /** Piper needs the VC++ runtime; the app ships it in resources/native/vcrt for PCs without the redistributable. */
 function piperEnv() {
@@ -126,7 +126,7 @@ export class Tts extends EventEmitter {
       this.emit('synthesis', { voice: voiceId, at: Date.now(), ms: Math.round(performance.now() - started), ok: true })
       return audio
     } catch (error) {
-      this.emit('synthesis', { voice: voiceId, at: Date.now(), ms: Math.round(performance.now() - started), ok: false, error: diagnosticMessage(error, [text, this.fish?.().apiKey || '']) })
+      this.emit('synthesis', { voice: voiceId, at: Date.now(), ms: Math.round(performance.now() - started), ok: false, error: synthesisDiagnosticError(error) })
       throw error
     }
   }

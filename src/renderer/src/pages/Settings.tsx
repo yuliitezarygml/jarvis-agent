@@ -1,12 +1,13 @@
 import { ReactNode, useEffect, useState } from 'react'
-import { Bot, Plug, Download, Eye, Info, Mic, SlidersHorizontal, Cpu, Volume2, X, Check } from 'lucide-react'
+import { Bot, Plug, Download, Eye, Info, Mic, SlidersHorizontal, Cpu, Volume2, X, Check, Activity } from 'lucide-react'
 import type { Settings, UpdateState } from '@shared/types'
 import { api, IPC } from '../api'
 import { useApp, useT } from '../store'
 import { ProviderPanel, openUrl } from '../components/ProviderPanel'
 import { ConnectorsPanel } from '../components/ConnectorsPanel'
+import { DiagnosticsPanel } from '../components/DiagnosticsPanel'
 
-type Tab = 'general' | 'agent' | 'connectors' | 'listening' | 'voice' | 'models' | 'about'
+type Tab = 'general' | 'agent' | 'connectors' | 'listening' | 'voice' | 'models' | 'diagnostics' | 'about'
 const TABS: { id: Tab; icon: typeof Bot; label: string; desc: string }[] = [
   { id: 'general', icon: SlidersHorizontal, label: 'st.general', desc: 'st.general.d' },
   { id: 'agent', icon: Bot, label: 'st.agent', desc: 'st.agent.d' },
@@ -14,6 +15,7 @@ const TABS: { id: Tab; icon: typeof Bot; label: string; desc: string }[] = [
   { id: 'listening', icon: Mic, label: 'st.listening', desc: 'st.listening.d' },
   { id: 'voice', icon: Volume2, label: 'st.voice', desc: 'st.voice.d' },
   { id: 'models', icon: Cpu, label: 'st.models', desc: 'st.models.d' },
+  { id: 'diagnostics', icon: Activity, label: 'diag.title', desc: 'diag.hint' },
   { id: 'about', icon: Info, label: 'st.about', desc: 'st.about.d' }
 ]
 
@@ -239,6 +241,8 @@ export function SettingsPage() {
                 </Group>
               </>
             )}
+
+            {tab === 'diagnostics' && <DiagnosticsPanel />}
 
             {tab === 'agent' && (
               <>

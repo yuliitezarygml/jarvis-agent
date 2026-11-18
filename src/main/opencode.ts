@@ -192,12 +192,13 @@ export class Opencode extends EventEmitter {
     }
   }
 
-  private async req<T = any>(method: string, path: string, body?: unknown, timeout = 30000): Promise<T> {
+  private async req<T = any>(method: string, path: string, body?: unknown, timeout = 30000, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted()
     const res = await fetch(this.base + path, {
       method,
       headers: body !== undefined ? { 'content-type': 'application/json' } : undefined,
       body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(timeout)
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout)
     })
     if (!res.ok) throw new Error(`opencode ${method} ${path} → ${res.status} ${(await res.text()).slice(0, 300)}`)
     const text = await res.text()
@@ -601,7 +602,7 @@ export class Opencode extends EventEmitter {
       model: { providerID, modelID: rest.join('/') },
       system,
       parts: [{ type: 'text', text }]
-    })
+    }, 30000, signal)
   }
 
   get lastVia() {

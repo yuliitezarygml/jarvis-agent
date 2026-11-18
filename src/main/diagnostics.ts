@@ -22,7 +22,20 @@ export function diagnosticServerUrl(value: string): string {
   }
 }
 
-export async function probeTtsServer(value: string, request: typeof fetch = fetch): Promise<TtsServerDiagnostic> {
+/** Upstream errors can quote fragments of the speech text: retain only a known category/status. */
+export function synthesisDiagnosticError(error: unknown): string {
+  const status = error && typeof error === 'object' && 'status' in error ? error.status : undefined
+  if (typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599) return `TTS HTTP ${status}`
+  const message = error instanceof Error ? error.message : ''
+  if (/timeout|timed out/i.test(message)) return 'Speech synthesis timed out'
+  if (/unreachable|fetch failed|ECONNREFUSED|ENETUNREACH/i.test(message)) return 'Could not connect to the TTS server'
+  if (/not set|not installed|ENOENT/i.test(message)) return 'Voice engine or voice is not configured'
+  if (/unexpected data|returned no audio/i.test(message)) return 'TTS returned invalid audio'
+  if (/piper exited/i.test(message)) return 'Piper process stopped'
+  return 'Speech synthesis failed'
+}
+
+export async function probeTtsServer(value: string, request: (url: string, init?: RequestInit) => Promise<Response> = fetch): Promise<TtsServerDiagnostic> {
   const started = performance.now()
   const result: TtsServerDiagnostic = { url: diagnosticServerUrl(value), ok: false, checkedAt: Date.now(), ms: 0 }
   try {
@@ -56,7 +69,9 @@ export class Diagnostics {
   }
 
   recordMicrophone(status: Omit<MicrophoneStatus, 'at'>) {
-    this.microphone = { ...status, error: status.error ? diagnosticMessage(status.error) : undefined, at: Date.now() }
+    const error = status.error ? diagnosticMessage(status.error) : undefined
+    if (this.microphone.state === status.state && this.microphone.deviceId === status.deviceId && this.microphone.error === error) return
+    this.microphone = { ...status, error, at: Date.now() }
     if (status.state === 'error') this.recordError('microphone', this.microphone.error || 'Microphone unavailable', false)
     this.changed()
   }

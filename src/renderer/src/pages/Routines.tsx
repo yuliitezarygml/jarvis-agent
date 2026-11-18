@@ -48,37 +48,37 @@ function Editor({ initial, onClose }: { initial: Partial<Routine>; onClose: () =
         {rows.map((row, i) => {
           const s = row.step
           return (
-          <div className="step-edit" key={row.id}>
-            <select className="select" value={s.type} onChange={(e) => editRows({ type: 'kind', id: row.id, kind: e.target.value as RoutineStep['type'] })}>
-              {STEP_TYPES.map((x) => (
-                <option key={x} value={x}>
-                  {t('step.' + x)}
-                </option>
-              ))}
-            </select>
-            <input
-              className="input"
-              placeholder={STEP_HINT[s.type][locale === 'ru' ? 0 : 1]}
-              value={row.draft ?? stepText(s)}
-              onChange={(e) => editRows({ type: 'text', id: row.id, text: e.target.value })}
-            />
-            <input
-              className="input after"
-              type="number"
-              min={0}
-              step={50}
-              title={t('routines.afterHint')}
-              placeholder={t('routines.after')}
-              value={s.after ?? ''}
-              onChange={(e) => editRows({ type: 'after', id: row.id, after: Number(e.target.value) || undefined })}
-            />
-            <button className="icon-btn" title="↑" disabled={i === 0} onClick={() => editRows({ type: 'move', id: row.id, offset: -1 })}>
-              ↑
-            </button>
-            <button className="icon-btn" onClick={() => editRows({ type: 'remove', id: row.id })}>
-              <X size={16} />
-            </button>
-          </div>
+            <div className="step-edit" key={row.id}>
+              <select className="select" value={s.type} onChange={(e) => editRows({ type: 'kind', id: row.id, kind: e.target.value as RoutineStep['type'] })}>
+                {STEP_TYPES.map((x) => (
+                  <option key={x} value={x}>
+                    {t('step.' + x)}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="input"
+                placeholder={STEP_HINT[s.type][locale === 'ru' ? 0 : 1]}
+                value={row.draft ?? stepText(s)}
+                onChange={(e) => editRows({ type: 'text', id: row.id, text: e.target.value })}
+              />
+              <input
+                className="input after"
+                type="number"
+                min={0}
+                step={50}
+                title={t('routines.afterHint')}
+                placeholder={t('routines.after')}
+                value={s.after ?? ''}
+                onChange={(e) => editRows({ type: 'after', id: row.id, after: Number(e.target.value) || undefined })}
+              />
+              <button className="icon-btn" title="↑" disabled={i === 0} onClick={() => editRows({ type: 'move', id: row.id, offset: -1 })}>
+                ↑
+              </button>
+              <button className="icon-btn" onClick={() => editRows({ type: 'remove', id: row.id })}>
+                <X size={16} />
+              </button>
+            </div>
           )
         })}
         <button className="btn sm" onClick={() => editRows({ type: 'add', step: blank('say') })}>
