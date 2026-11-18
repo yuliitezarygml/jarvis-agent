@@ -15,8 +15,13 @@ $projectLock = $null
 $dependencyStamp = Join-Path $projectRoot '.tmp\windows-dependencies.json'
 
 function Get-DependencySignature {
-    return ((Get-FileHash -LiteralPath (Join-Path $projectRoot 'package.json') -Algorithm SHA256).Hash + ':' +
-        (Get-FileHash -LiteralPath (Join-Path $projectRoot 'package-lock.json') -Algorithm SHA256).Hash)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hashes = foreach ($file in @('package.json', 'package-lock.json')) {
+            [BitConverter]::ToString($sha.ComputeHash([System.IO.File]::ReadAllBytes((Join-Path $projectRoot $file)))).Replace('-', '')
+        }
+        return $hashes -join ':'
+    } finally { $sha.Dispose() }
 }
 
 function Initialize-Node {
@@ -82,6 +87,7 @@ function Invoke-Npm {
 
 function Install-Dependencies {
     Initialize-Node
+    $signature = Get-DependencySignature
     if (-not $Check -and (Test-Path -LiteralPath $dependencyStamp)) { Remove-Item -LiteralPath $dependencyStamp -Force }
     Invoke-Npm -NpmArgs @('ci', '--no-audit', '--no-fund')
     # Recent Electron releases install their executable on demand; fetch it now, before dev/build.
@@ -89,7 +95,8 @@ function Install-Dependencies {
     if (-not $Check) {
         & $script:nodeExe (Join-Path $projectRoot 'node_modules\electron\install.js')
         if ($LASTEXITCODE -ne 0) { throw 'Electron installation failed. Check the connection and retry install-deps.bat.' }
-        @{ signature = Get-DependencySignature } | ConvertTo-Json | Set-Content -LiteralPath $dependencyStamp -Encoding UTF8
+        if ($signature -ne (Get-DependencySignature)) { throw 'Package files changed during installation. Run install-deps.bat again.' }
+        @{ signature = $signature } | ConvertTo-Json | Set-Content -LiteralPath $dependencyStamp -Encoding UTF8
     }
 }
 
