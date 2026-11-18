@@ -7,6 +7,8 @@
 //                       recognisers live there so their memory is freed when idle and decoding never stalls this loop.
 import { parentPort } from 'worker_threads'
 import { looseWakeGate } from '../../shared/textmatch'
+import { VoiceFocusFilter } from './voice-focus'
+import { VOICE_SAMPLE_SECONDS, type VoiceFocusConfig } from '../../shared/voice-focus'
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const sherpa = require('sherpa-onnx-node')
@@ -19,6 +21,7 @@ interface InitMsg {
   wakeDir: string
   aliases: string[]
   wakeEnabled: boolean
+  focus?: VoiceFocusConfig
 }
 
 const SR = 16000
@@ -52,6 +55,60 @@ let speechChunks = 0
 const CHUNK_MS = (512 / SR) * 1000
 
 const send = (m: any, transfer?: any[]) => parentPort!.postMessage({ ...m, generation }, transfer as any)
+let focusFailed = false
+const focus = new VoiceFocusFilter((config) => new sherpa.OnlineSpeechDenoiser({ model: {
+  voxlock: { enrollModel: config.enrollModel, chunkModel: config.chunkModel, voiceSample: config.voiceSample },
+  numThreads: 2, provider: 'cpu', debug: false
+} }))
+let recording: { id: number; chunks: Float32Array[]; length: number; voiced: number; frame: Float32Array; progress: number } | null = null
+
+function resetCapture() {
+  inSpeech = false; stream = null; utt = []; uttLen = 0; ring = []; ringLen = 0
+  frameBuf = new Float32Array(0); wakeHit = false; lastPartial = ''
+  try { vad?.reset() } catch {}
+}
+
+function configureFocus(config?: VoiceFocusConfig) {
+  focusFailed = false
+  if (config?.enabled) send({ type: 'focusStatus', state: 'loading' })
+  try {
+    focus.configure(config || { enabled: false, enrollModel: '', chunkModel: '', voiceSample: '' })
+    send({ type: 'focusStatus', state: config?.enabled ? 'ready' : 'off' })
+  } catch {
+    focusFailed = true
+    send({ type: 'focusStatus', state: 'error', error: config?.voiceSample ? 'filter' : 'profile' })
+  }
+}
+
+function recordAudio(samples: Float32Array) {
+  const capture = recording
+  if (!capture) return
+  const data = samples.slice(0, SR * VOICE_SAMPLE_SECONDS - capture.length)
+  capture.chunks.push(data); capture.length += data.length
+  const merged = new Float32Array(capture.frame.length + data.length)
+  merged.set(capture.frame); merged.set(data, capture.frame.length)
+  let at = 0
+  for (; at + 512 <= merged.length; at += 512) {
+    vad.acceptWaveform(merged.subarray(at, at + 512))
+    if (vad.isDetected()) capture.voiced += 512
+    while (!vad.isEmpty()) vad.pop()
+  }
+  capture.frame = merged.slice(at)
+  const seconds = Math.floor(capture.length / SR)
+  if (capture.progress !== seconds) {
+    capture.progress = seconds
+    send({ type: 'focusRecording', id: capture.id, seconds })
+  }
+  if (capture.length >= SR * VOICE_SAMPLE_SECONDS) {
+    recording = null
+    resetCapture()
+    if (capture.voiced < SR * 3) send({ type: 'focusRecorded', id: capture.id, error: 'quiet' })
+    else {
+      const audio = concat(capture.chunks, capture.length)
+      send({ type: 'focusRecorded', id: capture.id, samples: audio }, [audio.buffer])
+    }
+  }
+}
 
 function pushRing(chunk: Float32Array) {
   ring.push(chunk)
@@ -98,6 +155,7 @@ function init(m: InitMsg) {
       decodingMethod: 'greedy_search',
       enableEndpoint: false
     })
+    configureFocus(m.focus)
     send({ type: 'ready' })
   } catch (e: any) {
     send({ type: 'error', error: String(e?.stack || e) })
@@ -246,20 +304,29 @@ parentPort!.on('message', (m: any) => {
       break
     case 'reset':
       generation = m.generation
-      inSpeech = false
-      stream = null
-      utt = []
-      uttLen = 0
-      ring = []
-      ringLen = 0
-      frameBuf = new Float32Array(0)
-      wakeHit = false
-      lastPartial = ''
-      try { vad?.reset() } catch {}
+      recording = null
+      resetCapture()
       setMode(m.mode === 'command' ? 'command' : 'wake', 0, false, m.modeVersion)
       break
     case 'audio':
-      onAudio(m.samples)
+      if (recording) recordAudio(m.samples)
+      else if (!focusFailed) {
+        try { onAudio(focus.process(m.samples)) }
+        catch {
+          focusFailed = true
+          resetCapture()
+          send({ type: 'speech', on: false })
+          send({ type: 'focusStatus', state: 'error', error: 'filter' })
+        }
+      }
+      break
+    case 'focusRecord':
+      resetCapture()
+      recording = { id: m.id, chunks: [], length: 0, voiced: 0, frame: new Float32Array(0), progress: -1 }
+      break
+    case 'focusCancel':
+      recording = null
+      resetCapture()
       break
     case 'mode':
       setMode(m.mode, m.timeoutMs || 0, !!m.silent, m.modeVersion)

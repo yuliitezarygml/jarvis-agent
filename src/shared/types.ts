@@ -10,6 +10,7 @@ export interface Settings {
   interfaceLang: Lang | 'auto'
   lastInputLanguage: Lang | ''
   micDeviceId: string
+  voiceFocusEnabled: boolean
   sttModel: 'parakeet-en' | 'whisper-base' | 'whisper-small' | 'whisper-turbo'
   sttLanguage: 'auto' | Lang
   voiceEnabled: boolean
@@ -72,6 +73,7 @@ export const DEFAULT_SETTINGS: Settings = {
   interfaceLang: 'auto',
   lastInputLanguage: '',
   micDeviceId: 'default',
+  voiceFocusEnabled: false,
   sttModel: 'parakeet-en',
   sttLanguage: 'auto',
   voiceEnabled: true,
@@ -313,6 +315,11 @@ export const IPC = {
   permissionReply: 'permission:reply',
   permissionClose: 'permission:close',
   audioChunk: 'audio:chunk',
+  voiceFocusGet: 'voice-focus:get',
+  voiceFocusChanged: 'voice-focus:changed',
+  voiceFocusRecord: 'voice-focus:record',
+  voiceFocusCancel: 'voice-focus:cancel',
+  voiceFocusRemove: 'voice-focus:remove',
   micLevel: 'audio:level',
   transcript: 'stt:transcript',
   ttsPlay: 'tts:play',

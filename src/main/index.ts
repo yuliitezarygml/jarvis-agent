@@ -250,7 +250,7 @@ function applySettings(patch: Partial<Settings>) {
   const before = assistant.settings()
   const next = assistant.settingsStore.set(patch)
   broadcast(IPC.settingsChanged, next)
-  if (patch.sttModel && patch.sttModel !== before.sttModel) assistant.speech.restart()
+  if ((patch.sttModel && patch.sttModel !== before.sttModel) || ('voiceFocusEnabled' in patch && patch.voiceFocusEnabled !== before.voiceFocusEnabled) || ('micDeviceId' in patch && patch.micDeviceId !== before.micDeviceId)) assistant.speech.restart()
   else if ('wakePhrases' in patch || 'wakeSensitivity' in patch || 'wakeEnabled' in patch || 'sttLanguage' in patch) assistant.speech.updateConfig()
   if (patch.apiKey !== undefined && patch.apiKey !== before.apiKey) void assistant.opencode.applyAuth().then(() => assistant.opencode.listModels(true))
   if ((patch.permissionMode && patch.permissionMode !== before.permissionMode) || (patch.cwd !== undefined && patch.cwd !== before.cwd) || (patch.customProvider && JSON.stringify(patch.customProvider) !== JSON.stringify(before.customProvider)) || (patch.connectors && JSON.stringify(patch.connectors) !== JSON.stringify(before.connectors)))
@@ -272,6 +272,9 @@ function applySettings(patch: Partial<Settings>) {
   assistant.emitStatus()
   return next
 }
+
+let voiceFocusRequest = 0
+let voiceFocusPreparing = false
 
 function wireIpc() {
   ipcMain.handle(IPC.settingsGet, () => assistant.settings())
@@ -304,6 +307,30 @@ function wireIpc() {
     return assistant.replyPermission(id, answer)
   })
   ipcMain.handle(IPC.toggleListen, () => assistant.toggleListen())
+  ipcMain.handle(IPC.voiceFocusGet, () => assistant.speech.voiceFocusStatus())
+  ipcMain.handle(IPC.voiceFocusRecord, async () => {
+    if (voiceFocusPreparing || assistant.speech.voiceFocusStatus().state === 'recording') return assistant.speech.voiceFocusStatus()
+    const revision = ++voiceFocusRequest
+    voiceFocusPreparing = true
+    try {
+      await assistant.abortTask()
+      await installAssets(['voxlock'])
+      if (revision !== voiceFocusRequest) return assistant.speech.voiceFocusStatus()
+      if (!assistant.speech.ready) {
+        assistant.speech.start()
+        const until = Date.now() + 10_000
+        while (!assistant.speech.ready && Date.now() < until && revision === voiceFocusRequest) await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      if (revision !== voiceFocusRequest) return assistant.speech.voiceFocusStatus()
+      return assistant.speech.beginVoiceSample()
+    } finally { voiceFocusPreparing = false }
+  })
+  ipcMain.handle(IPC.voiceFocusCancel, () => { voiceFocusRequest++; return assistant.speech.cancelVoiceSample() })
+  ipcMain.handle(IPC.voiceFocusRemove, () => {
+    voiceFocusRequest++
+    applySettings({ voiceFocusEnabled: false })
+    return assistant.speech.removeVoiceSample()
+  })
 
   ipcMain.handle(IPC.modelAssets, () => listAssets(dataDir()))
   ipcMain.handle(IPC.modelDownload, (_e, ids: string[]) => installAssets(ids))
@@ -465,6 +492,12 @@ async function autoInstall() {
 }
 
 function wireAssistantEvents() {
+  assistant.speech.on('voiceFocus', (status) => broadcast(IPC.voiceFocusChanged, status))
+  assistant.speech.on('voiceSampleSaved', () => {
+    applySettings({ voiceFocusEnabled: true })
+    // Re-recording an already enabled profile still requires reloading its conditioning state.
+    if (assistant.speech.voiceFocusStatus().state === 'loading' && assistant.speech.ready) assistant.speech.restart()
+  })
   assistant.on('status', (s) => broadcast(IPC.status, s))
   assistant.on('chat', (item) => toUi(IPC.chat, item))
   assistant.on('permission', (r) => {

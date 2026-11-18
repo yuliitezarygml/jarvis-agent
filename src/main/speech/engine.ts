@@ -2,11 +2,13 @@ import { Worker } from 'worker_threads'
 import { fork, ChildProcess } from 'child_process'
 import { EventEmitter } from 'events'
 import { join } from 'path'
-import { existsSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import type { Settings } from '../../shared/types'
 import { pathsFor } from '../models'
 import { CommandBuffer } from './command-buffer'
 import { conversationControl, conversationPause, SpeechEchoFilter } from '../../shared/conversation'
+import { validVoiceSample, voiceSampleWav } from './voice-focus'
+import type { VoiceFocusStatus } from '../../shared/voice-focus'
 
 export type SpeechEvent =
   | { type: 'ready' }
@@ -63,6 +65,12 @@ export class SpeechEngine extends EventEmitter {
   private outputSpeaking = false
   private responding = false
   private readonly echo = new SpeechEchoFilter()
+  private ownerSample = false
+  private focusState: VoiceFocusStatus['state'] = 'off'
+  private focusError: VoiceFocusStatus['error']
+  private recordingId = 0
+  private recordingSeconds = 0
+  private recordingTimer: NodeJS.Timeout | null = null
   ready = false
 
   constructor(
@@ -70,6 +78,7 @@ export class SpeechEngine extends EventEmitter {
     private getSettings: () => Settings
   ) {
     super()
+    try { this.ownerSample = validVoiceSample(readFileSync(this.samplePath())) } catch {}
     this.buffer = new CommandBuffer({
       pauseMs: () => this.getSettings().commandPauseSeconds * 1000,
       answerMode: () => this.answerMode,
@@ -87,6 +96,46 @@ export class SpeechEngine extends EventEmitter {
 
   get commandDraft() { return this.buffer.active }
   get conversation() { return this.conversationActive }
+
+  private samplePath() { return join(this.base, 'voice-focus', 'owner.wav') }
+  voiceFocusStatus(): VoiceFocusStatus {
+    return { enabled: this.getSettings().voiceFocusEnabled, profile: this.ownerSample, state: this.focusState, seconds: this.recordingSeconds, error: this.focusError }
+  }
+  private focusChanged() { this.emit('voiceFocus', this.voiceFocusStatus()) }
+
+  beginVoiceSample() {
+    if (!this.worker || !this.ready) throw new Error('Speech input is not ready')
+    this.cancelListen()
+    const id = ++this.recordingId
+    this.focusState = 'recording'; this.recordingSeconds = 0; this.focusError = undefined
+    this.worker.postMessage({ type: 'focusRecord', id })
+    this.recordingTimer = setTimeout(() => {
+      this.cancelVoiceSample()
+      this.focusState = 'error'; this.focusError = 'microphone'; this.focusChanged()
+    }, 20_000)
+    this.focusChanged()
+    return this.voiceFocusStatus()
+  }
+
+  cancelVoiceSample() {
+    if (this.recordingTimer) clearTimeout(this.recordingTimer)
+    this.recordingTimer = null
+    this.recordingId++
+    this.worker?.postMessage({ type: 'focusCancel' })
+    if (this.focusState === 'recording') {
+      this.focusState = this.getSettings().voiceFocusEnabled && this.ownerSample ? 'ready' : 'off'
+      this.recordingSeconds = 0; this.focusChanged()
+    }
+    return this.voiceFocusStatus()
+  }
+
+  removeVoiceSample() {
+    this.cancelVoiceSample()
+    rmSync(this.samplePath(), { force: true })
+    this.ownerSample = false; this.focusState = 'off'; this.focusError = undefined
+    this.focusChanged()
+    return this.voiceFocusStatus()
+  }
 
   setConversation(on: boolean, reason: 'user' | 'idle' | 'cancelled' = 'user') {
     const changed = this.conversationActive !== on
@@ -162,13 +211,43 @@ export class SpeechEngine extends EventEmitter {
       this.worker = null
       this.ready = false
     })
-    w.postMessage({ type: 'init', generation: this.generation, modeVersion: this.modeVersion, vad: p.vad, wakeDir: p.wakeDir, aliases: this.aliases(), wakeEnabled: s.wakeEnabled })
+    this.focusState = s.voiceFocusEnabled ? 'loading' : 'off'
+    w.postMessage({ type: 'init', generation: this.generation, modeVersion: this.modeVersion, vad: p.vad, wakeDir: p.wakeDir, aliases: this.aliases(), wakeEnabled: s.wakeEnabled,
+      focus: { enabled: s.voiceFocusEnabled, enrollModel: existsSync(p.focusEnroll) ? p.focusEnroll : '', chunkModel: existsSync(p.focusChunk) ? p.focusChunk : '', voiceSample: this.ownerSample ? this.samplePath() : '' } })
+    this.focusChanged()
     return true
   }
 
   private onWorker(m: any) {
     if (m.type === 'ready') this.ready = true
     if (m.type !== 'ready' && m.generation !== this.generation) return
+    if (m.type === 'focusStatus') {
+      if (this.focusState !== 'recording') {
+        if (m.state === 'error') this.cancelListen()
+        this.focusState = m.state; this.focusError = m.error; this.focusChanged()
+      }
+      return
+    }
+    if (m.type === 'focusRecording') {
+      if (m.id === this.recordingId && this.focusState === 'recording') { this.recordingSeconds = m.seconds; this.focusChanged() }
+      return
+    }
+    if (m.type === 'focusRecorded') {
+      if (m.id !== this.recordingId || this.focusState !== 'recording') return
+      if (this.recordingTimer) clearTimeout(this.recordingTimer)
+      this.recordingTimer = null
+      if (m.error) { this.focusState = 'error'; this.focusError = m.error; this.focusChanged(); return }
+      try {
+        const wav = voiceSampleWav(m.samples)
+        mkdirSync(join(this.base, 'voice-focus'), { recursive: true })
+        writeFileSync(this.samplePath() + '.tmp', wav, { mode: 0o600 })
+        renameSync(this.samplePath() + '.tmp', this.samplePath())
+        this.ownerSample = true; this.focusState = 'loading'; this.focusError = undefined
+        this.focusChanged()
+        this.emit('voiceSampleSaved')
+      } catch { this.focusState = 'error'; this.focusError = 'save'; this.focusChanged() }
+      return
+    }
     if (m.type === 'mode') {
       if (m.modeVersion !== undefined && m.modeVersion !== this.modeVersion) return
       // An acknowledgement of an older request must not undo a follow-up opened by the main thread.
@@ -371,6 +450,7 @@ export class SpeechEngine extends EventEmitter {
   }
 
   cancelListen(endConversation = true) {
+    if (this.focusState === 'recording') this.cancelVoiceSample()
     if (endConversation && this.conversationActive) {
       this.conversationActive = false
       if (this.conversationTimer) clearTimeout(this.conversationTimer)
@@ -413,6 +493,7 @@ export class SpeechEngine extends EventEmitter {
   }
 
   dispose() {
+    this.cancelVoiceSample()
     this.cancelListen()
     this.killChild()
     void this.worker?.terminate()
