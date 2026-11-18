@@ -37,3 +37,21 @@ test('an existing voice is reinstalled when its config is missing, corrupt or in
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('voice isolation is unavailable until both pinned model files pass checksum verification', () => {
+  const prefix = join(tmpdir(), 'jarvis-focus-assets-')
+  const root = mkdtempSync(prefix)
+  const dir = join(root, 'models/voice-focus')
+  try {
+    mkdirSync(dir, { recursive: true })
+    const installed = () => listAssets(root).find((a) => a.id === 'voxlock')!.installed
+    assert.equal(installed(), false)
+    writeFileSync(join(dir, 'voxlock_enroll.onnx'), 'incomplete model')
+    assert.equal(installed(), false)
+    writeFileSync(join(dir, 'voxlock_chunk_int8.onnx'), 'incorrect model')
+    assert.equal(installed(), false)
+  } finally {
+    assert.ok(root.startsWith(prefix))
+    rmSync(root, { recursive: true, force: true })
+  }
+})

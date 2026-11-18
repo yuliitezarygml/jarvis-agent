@@ -37,7 +37,7 @@ function recognise(russian: string, multilingual: { text: string; lang: string }
   } })
   process.emit('message', { type: 'job', id: 1, samples: new Float32Array(1600), commandMode,
     gateHit: false, partial: '', aliases: ['джарвис', 'jarvis'], sensitivity: 0.6, language })
-  return { transcript: events.find((e) => e.type === 'transcript'), multilingualCalls }
+  return { transcript: events.find((e) => e.type === 'transcript'), ignored: events.some((e) => e.type === 'ignored'), multilingualCalls }
 }
 
 test('actual ASR coordinator keeps a clear Russian wake command despite an incorrect English alternative', () => {
@@ -69,5 +69,13 @@ test('English and Romanian continuations still use multilingual recognition, and
     assert.equal(result.transcript?.text, sample.text)
     assert.equal(result.transcript?.lang, sample.lang)
     assert.equal(result.multilingualCalls, 1)
+  }
+})
+
+test('background labels never become commands, even if another recogniser invents a word', () => {
+  for (const text of ['(indistinct chatter) [Music]', '[Music] Yeah.', 'ука [Music] [inaudible]']) {
+    const result = recognise('ука', { text, lang: 'ru' }, true)
+    assert.equal(result.transcript, undefined, text)
+    assert.equal(result.ignored, true, text)
   }
 })

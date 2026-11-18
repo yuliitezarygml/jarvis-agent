@@ -5,6 +5,7 @@ import { api, IPC } from '../api'
 import { useApp, useT } from '../store'
 import { ProviderPanel, openUrl } from '../components/ProviderPanel'
 import { ConnectorsPanel } from '../components/ConnectorsPanel'
+import { VoiceFocusPanel } from '../components/VoiceFocusPanel'
 
 type Tab = 'general' | 'agent' | 'connectors' | 'listening' | 'voice' | 'models' | 'about'
 const TABS: { id: Tab; icon: typeof Bot; label: string; desc: string }[] = [
@@ -297,6 +298,7 @@ export function SettingsPage() {
 
             {tab === 'listening' && (
               <>
+                <VoiceFocusPanel />
                 <Group title={t('sg.wake')}>
                   <Row label={t('settings.wakeEnabled')}>
                     <Switch on={s.wakeEnabled} onChange={(v) => patch({ wakeEnabled: v })} />

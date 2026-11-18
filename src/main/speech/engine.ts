@@ -9,6 +9,7 @@ import { CommandBuffer } from './command-buffer'
 import { conversationControl, conversationPause, SpeechEchoFilter } from '../../shared/conversation'
 import { validVoiceSample, voiceSampleWav } from './voice-focus'
 import type { VoiceFocusStatus } from '../../shared/voice-focus'
+import { isDictation, nonSpeechTranscript } from './noise'
 
 export type SpeechEvent =
   | { type: 'ready' }
@@ -54,6 +55,7 @@ export class SpeechEngine extends EventEmitter {
   private queue: Job[] = []
   private inFlight: Job | null = null
   private produced = false
+  private ignored = false
   private seq = 0
   private generation = 0
   private collectCommands = true
@@ -71,6 +73,7 @@ export class SpeechEngine extends EventEmitter {
   private recordingId = 0
   private recordingSeconds = 0
   private recordingTimer: NodeJS.Timeout | null = null
+  private focusBeforeRecording: Pick<VoiceFocusStatus, 'state' | 'error'> = { state: 'off' }
   ready = false
 
   constructor(
@@ -107,6 +110,7 @@ export class SpeechEngine extends EventEmitter {
     if (!this.worker || !this.ready) throw new Error('Speech input is not ready')
     this.cancelListen()
     const id = ++this.recordingId
+    this.focusBeforeRecording = { state: this.focusState, error: this.focusError }
     this.focusState = 'recording'; this.recordingSeconds = 0; this.focusError = undefined
     this.worker.postMessage({ type: 'focusRecord', id })
     this.recordingTimer = setTimeout(() => {
@@ -123,7 +127,8 @@ export class SpeechEngine extends EventEmitter {
     this.recordingId++
     this.worker?.postMessage({ type: 'focusCancel' })
     if (this.focusState === 'recording') {
-      this.focusState = this.getSettings().voiceFocusEnabled && this.ownerSample ? 'ready' : 'off'
+      this.focusState = this.focusBeforeRecording.state
+      this.focusError = this.focusBeforeRecording.error
       this.recordingSeconds = 0; this.focusChanged()
     }
     return this.voiceFocusStatus()
@@ -367,6 +372,7 @@ export class SpeechEngine extends EventEmitter {
     if (!job) return
     this.inFlight = job
     this.produced = false
+    this.ignored = false
     const s = this.getSettings()
     this.child.send({
       type: 'job',
@@ -375,6 +381,7 @@ export class SpeechEngine extends EventEmitter {
       commandMode: job.commandMode,
       gateHit: job.gateHit,
       partial: job.partial,
+      dictating: isDictation(this.buffer.text),
       aliases: this.aliases(),
       sensitivity: s.wakeSensitivity,
       language: s.sttLanguage === 'auto' ? '' : s.sttLanguage
@@ -388,7 +395,9 @@ export class SpeechEngine extends EventEmitter {
     } else if (m.type === 'event') {
       if (m.id === 0) { this.emit('event', m.event); return }
       if (m.id !== this.inFlight?.id || this.inFlight?.generation !== this.generation) return
+      if (m.event.type === 'ignored') { this.ignored = true; return }
       if (m.event.type === 'transcript') {
+        if (!isDictation(this.buffer.text) && nonSpeechTranscript(m.event.raw, m.event.text)) { this.ignored = true; return }
         if (this.produced) return // one final transcript per recognition job
         this.produced = true
         const control = conversationControl(m.event.raw, this.aliases(), this.getSettings().wakeSensitivity)
@@ -416,15 +425,16 @@ export class SpeechEngine extends EventEmitter {
       if (!this.inFlight || m.id !== this.inFlight.id) return
       const current = this.inFlight.generation === this.generation
       const wasProduced = this.produced
+      const wasIgnored = this.ignored
       this.inFlight = null
       this.buffer.pending(this.pendingJobs())
       if (current) {
         this.emit('event', { type: 'busy', on: false })
-        if (!wasProduced && this.buffer.active) {
+        if (!wasProduced && !wasIgnored && this.buffer.active) {
           // A lost continuation must not turn the earlier partial command into an executable one.
           this.cancelListen()
           this.emit('event', { type: 'inputExpired', reason: 'recognition' })
-        } else if (!wasProduced) this.emit('event', { type: 'noResult' })
+        } else if (!wasProduced && !wasIgnored) this.emit('event', { type: 'noResult' })
       }
       this.armIdle()
       this.pump()

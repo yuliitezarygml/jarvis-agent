@@ -330,6 +330,23 @@ test('an unrecognised continuation discards the entire draft instead of executin
   assert.ok(f.events.some((e) => e.type === 'inputExpired' && e.reason === 'recognition'))
 })
 
+test('an ignored background fragment preserves the user draft and never becomes a command', (t) => {
+  const f = engineFixture(t)
+  const first = f.job()
+  f.result(first, 'открой')
+  f.done(first)
+  const noise = f.job(true)
+  f.internal.onChild({ type: 'event', id: noise, event: { type: 'ignored', reason: 'noise' } })
+  f.done(noise)
+  assert.equal(f.engine.commandDraft, true)
+  assert.equal(f.events.some((e) => e.type === 'inputExpired'), false)
+  const next = f.job(true)
+  f.result(next, 'папку документов')
+  f.done(next)
+  t.mock.timers.tick(3500)
+  assert.deepEqual(f.output().map((e) => e.text), ['открой папку документов'])
+})
+
 test('a window timeout cannot close a draft or pending recognition', (t) => {
   const f = engineFixture(t)
   const id = f.job()

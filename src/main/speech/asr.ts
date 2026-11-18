@@ -9,6 +9,7 @@
 import { stripWake, looseWakeGate, wakeThreshold, findWake } from '../../shared/textmatch'
 import { detectLanguage, isLang, romanianDiacritics } from '../../shared/language'
 import { confidentRussian } from './language'
+import { nonSpeechTranscript } from './noise'
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const sherpa = require('sherpa-onnx-node')
@@ -122,6 +123,7 @@ function transcribe(x: Float32Array, language: string, russianText?: string): { 
   const russian = !language && cfg.gigaDir ? russianText ?? gigaText(x) : ''
   if (russian && confidentRussian(russian)) return { text: russian, lang: 'ru' }
   const w = whisperText(x)
+  if (nonSpeechTranscript(w.text)) return w // retain the uncertainty marker for the caller to ignore
   if (w.lang === 'ru' && cfg.gigaDir) return { text: russian || gigaText(x) || w.text, lang: 'ru' }
   if (w.lang === 'en' && cfg.parakeetDir) return { text: decode(getParakeet(), x) || w.text, lang: 'en' }
   return w
@@ -137,6 +139,7 @@ interface Job {
   aliases: string[]
   sensitivity: number
   language: string
+  dictating?: boolean
 }
 
 function runJob(m: Job) {
@@ -212,8 +215,12 @@ function runJob(m: Job) {
         }
         command = r.command
       }
-      if (!m.gateHit) emit({ type: 'wake', text: raw })
     }
+    if (!m.dictating && nonSpeechTranscript(raw, command)) {
+      emit({ type: 'ignored', reason: 'noise' })
+      return
+    }
+    if (!m.commandMode && !m.gateHit) emit({ type: 'wake', text: raw })
     produced = true
     emit({ type: 'transcript', text: command.trim(), raw, woke: true, ms: Date.now() - t0, viaWake: !m.commandMode, lang })
   } catch (e: any) {

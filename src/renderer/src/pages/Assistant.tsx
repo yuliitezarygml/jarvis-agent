@@ -7,6 +7,7 @@ import { Markdown } from '../components/Markdown'
 import { PermissionStack } from '../components/Overlays'
 import { api, IPC } from '../api'
 import { useApp, useT } from '../store'
+import { VoiceFocusPanel } from '../components/VoiceFocusPanel'
 
 const TOOL_ICON: Record<string, typeof Wrench> = {
   bash: Terminal,
@@ -407,6 +408,7 @@ export function AssistantPage() {
           </div>
           <LiveSteps status={status} />
           <div className="hint">{status.conversation ? t('conversation.hint') : status.listeningForWake && !status.steps?.length ? t('home.hint', { hotkey }) : ''}</div>
+          <VoiceFocusPanel compact />
           <div className="chips">
             <span className={'chip ' + (status.opencode === 'ready' || status.opencode === 'sleeping' ? 'ok' : status.opencode === 'error' ? 'bad' : 'warn')}>
               <i className="dot" />

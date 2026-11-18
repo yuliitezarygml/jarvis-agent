@@ -1,5 +1,6 @@
 import { interfaceLanguage } from '../../shared/language'
 import { ro } from './ro'
+import { voiceFocusText } from './voice-focus-i18n'
 export type Dict = Record<string, string>
 
 const en: Dict = {
@@ -574,6 +575,9 @@ const ru: Dict = {
   'ui.send': 'Отправить'
 }
 
+Object.assign(en, voiceFocusText.en)
+Object.assign(ru, voiceFocusText.ru)
+Object.assign(ro, voiceFocusText.ro)
 export const dicts = { en, ru, ro }
 export type Locale = keyof typeof dicts
 
