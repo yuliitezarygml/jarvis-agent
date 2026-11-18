@@ -18,7 +18,6 @@ if (!app.requestSingleInstanceLock()) {
 app.setName('Jarvis')
 initLogging()
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
-let showVoiceSetup = process.argv.includes('--voice-setup')
 app.commandLine.appendSwitch('js-flags', '--expose-gc') // lets the speech worker hand model memory back when idle
 // memory: network and audio services run inside the main process instead of two extra processes.
 // (No process-per-site: sharing one renderer between the opaque main window and the transparent HUD / overlay makes
@@ -101,8 +100,7 @@ function createMain() {
   })
   // the HUD would sit on top of the main window, so it only shows while the main window is not in use
   for (const ev of ['focus', 'blur', 'show', 'hide', 'minimize', 'restore', 'move', 'resize', 'maximize', 'unmaximize'] as const) mainWin.on(ev as any, syncHud)
-  void mainWin.loadURL(rendererUrl('index.html') + (showVoiceSetup ? '#voice-focus' : ''))
-  showVoiceSetup = false
+  void mainWin.loadURL(rendererUrl('index.html'))
 }
 
 /** Windows drops TOPMOST on a window when its style flags change (focusable / click-through) or when another topmost window
@@ -252,13 +250,12 @@ function applySettings(patch: Partial<Settings>) {
   const before = assistant.settings()
   const next = assistant.settingsStore.set(patch)
   broadcast(IPC.settingsChanged, next)
-  if ((patch.sttModel && patch.sttModel !== before.sttModel) || ('voiceFocusEnabled' in patch && patch.voiceFocusEnabled !== before.voiceFocusEnabled) || ('micDeviceId' in patch && patch.micDeviceId !== before.micDeviceId)) assistant.speech.restart()
+  if (patch.sttModel && patch.sttModel !== before.sttModel) assistant.speech.restart()
   else if ('wakePhrases' in patch || 'wakeSensitivity' in patch || 'wakeEnabled' in patch || 'sttLanguage' in patch) assistant.speech.updateConfig()
   if (patch.apiKey !== undefined && patch.apiKey !== before.apiKey) void assistant.opencode.applyAuth().then(() => assistant.opencode.listModels(true))
   if ((patch.permissionMode && patch.permissionMode !== before.permissionMode) || (patch.cwd !== undefined && patch.cwd !== before.cwd) || (patch.customProvider && JSON.stringify(patch.customProvider) !== JSON.stringify(before.customProvider)) || (patch.connectors && JSON.stringify(patch.connectors) !== JSON.stringify(before.connectors)))
     void assistant.opencode.restart()
   if (patch.autoUpdate) updater.setMode(patch.autoUpdate)
-  if (patch.conversationIdleSeconds !== undefined && assistant.speech.conversation) assistant.speech.setConversation(true)
   if (patch.hotkey !== undefined) registerHotkey()
   if (patch.autoStart !== undefined) applyAutoStart()
   if (patch.hudCorner) {
@@ -275,9 +272,6 @@ function applySettings(patch: Partial<Settings>) {
   return next
 }
 
-let voiceFocusRequest = 0
-let voiceFocusPreparing = false
-
 function wireIpc() {
   ipcMain.handle(IPC.settingsGet, () => assistant.settings())
   ipcMain.handle(IPC.settingsSet, (_e, patch: Partial<Settings>) => applySettings(patch))
@@ -285,20 +279,10 @@ function wireIpc() {
   ipcMain.handle(IPC.chatHistory, () => assistant.opencode.history())
   ipcMain.handle(IPC.sendText, (_e, text: string) => assistant.handleCommand(text, 'text'))
   ipcMain.handle(IPC.abort, () => assistant.abortTask())
-  ipcMain.handle(IPC.conversationEnd, () => assistant.endConversation())
-  ipcMain.handle(IPC.chatReset, () => {
-    assistant.speech.cancelListen()
-    return assistant.opencode.newThread()
-  })
+  ipcMain.handle(IPC.chatReset, () => assistant.opencode.newThread())
   ipcMain.handle(IPC.threads, () => assistant.threads.state())
-  ipcMain.handle(IPC.threadNew, () => {
-    assistant.speech.cancelListen()
-    return assistant.opencode.newThread()
-  })
-  ipcMain.handle(IPC.threadSwitch, (_e, id: string) => {
-    assistant.speech.cancelListen()
-    return assistant.opencode.switchThread(id)
-  })
+  ipcMain.handle(IPC.threadNew, () => assistant.opencode.newThread())
+  ipcMain.handle(IPC.threadSwitch, (_e, id: string) => assistant.opencode.switchThread(id))
   ipcMain.handle(IPC.threadDelete, (_e, id: string) => assistant.opencode.deleteThread(id))
   ipcMain.handle(IPC.threadRename, (_e, id: string, title: string) => assistant.threads.rename(id, title))
   ipcMain.handle(IPC.models, (_e, fetchAll: boolean) => assistant.opencode.listModels(fetchAll))
@@ -309,38 +293,6 @@ function wireIpc() {
     return assistant.replyPermission(id, answer)
   })
   ipcMain.handle(IPC.toggleListen, () => assistant.toggleListen())
-  ipcMain.handle(IPC.voiceFocusGet, () => assistant.speech.voiceFocusStatus())
-  ipcMain.handle(IPC.voiceFocusPrepare, async (_e, on: boolean) => {
-    assistant.speech.prepareVoiceSample(on === true)
-    if (on) await assistant.abortTask()
-    return assistant.speech.voiceFocusStatus()
-  })
-  ipcMain.handle(IPC.voiceFocusRecord, async () => {
-    if (voiceFocusPreparing || assistant.speech.voiceFocusStatus().state === 'recording') return assistant.speech.voiceFocusStatus()
-    const revision = ++voiceFocusRequest
-    voiceFocusPreparing = true
-    assistant.speech.prepareVoiceSample(true)
-    try {
-      await assistant.abortTask()
-      await installAssets(['voxlock'])
-      if (revision !== voiceFocusRequest) return assistant.speech.voiceFocusStatus()
-      if (!assistant.speech.ready) {
-        assistant.speech.start()
-        const until = Date.now() + 10_000
-        while (!assistant.speech.ready && Date.now() < until && revision === voiceFocusRequest) await new Promise((resolve) => setTimeout(resolve, 100))
-      }
-      if (revision !== voiceFocusRequest) return assistant.speech.voiceFocusStatus()
-      await assistant.abortTask() // no late reply or acknowledgement may become part of the recording
-      if (revision !== voiceFocusRequest) return assistant.speech.voiceFocusStatus()
-      return assistant.speech.beginVoiceSample()
-    } finally { voiceFocusPreparing = false }
-  })
-  ipcMain.handle(IPC.voiceFocusCancel, () => { voiceFocusRequest++; return assistant.speech.cancelVoiceSample() })
-  ipcMain.handle(IPC.voiceFocusRemove, () => {
-    voiceFocusRequest++
-    applySettings({ voiceFocusEnabled: false })
-    return assistant.speech.removeVoiceSample()
-  })
 
   ipcMain.handle(IPC.modelAssets, () => listAssets(dataDir()))
   ipcMain.handle(IPC.modelDownload, (_e, ids: string[]) => installAssets(ids))
@@ -431,7 +383,7 @@ function wireIpc() {
     return out
   })
   ipcMain.handle('voice:preview', async (_e, text: string, voice: string) => {
-    const lang = voice.startsWith('ro_') ? 'ro' : /[а-яё]/i.test(text) ? 'ru' : 'en'
+    const lang = /[а-яё]/i.test(text) ? 'ru' : 'en'
     const wav = await assistant.tts.synth(text, voice, assistant.settings().voiceSpeed, lang)
     toUi('noop')
     hudWin?.webContents.send(IPC.ttsPlay, { id: 'preview-' + Date.now(), wav, fx: assistant.settings().voiceFx, volume: assistant.settings().voiceVolume })
@@ -461,7 +413,7 @@ function wireIpc() {
   ipcMain.on(IPC.audioChunk, (_e, buf: ArrayBuffer) => assistant.speech.feed(buf))
   ipcMain.on(IPC.micLevel, (_e, level: number) => toUi(IPC.micLevel, level))
   ipcMain.on(IPC.ttsLevel, (_e, level: number) => toUi(IPC.ttsLevel, level))
-  ipcMain.on(IPC.ttsEnded, (_e, id: string, completed = true) => assistant.onPlayEnded(id, completed))
+  ipcMain.on(IPC.ttsEnded, (_e, id: string) => assistant.onPlayEnded(id))
 }
 
 // ---- dependency installer: one queue, so the launch-time auto install and the Setup button never race ----
@@ -502,13 +454,6 @@ async function autoInstall() {
 }
 
 function wireAssistantEvents() {
-  assistant.speech.on('voiceFocus', (status) => broadcast(IPC.voiceFocusChanged, status))
-  assistant.speech.on('voiceSampleSaved', () => {
-    assistant.speech.prepareVoiceSample(false)
-    applySettings({ voiceFocusEnabled: true })
-    // Re-recording an already enabled profile still requires reloading its conditioning state.
-    if (assistant.speech.voiceFocusStatus().state === 'loading' && assistant.speech.ready) assistant.speech.restart()
-  })
   assistant.on('status', (s) => broadcast(IPC.status, s))
   assistant.on('chat', (item) => toUi(IPC.chat, item))
   assistant.on('permission', (r) => {
@@ -621,7 +566,6 @@ async function debugShots(dir: string) {
 app.on('second-instance', showMain)
 app.on('before-quit', () => {
   quitting = true
-  assistant?.speech.cancelListen()
 })
 app.on('will-quit', () => globalShortcut.unregisterAll())
 app.on('window-all-closed', () => {})
@@ -630,7 +574,6 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(['media', 'audioCapture', 'clipboard-sanitized-write'].includes(permission)))
   session.defaultSession.setPermissionCheckHandler(() => true)
   assistant = new Assistant()
-  if (showVoiceSetup) assistant.speech.prepareVoiceSample(true)
   wireIpc()
   wireAssistantEvents()
   createMain()
@@ -744,8 +687,8 @@ app.whenReady().then(async () => {
   if (process.env.JARVIS_TEST_SAY) {
     await new Promise((r) => setTimeout(r, 5000))
     const st = assistant.settings()
-    console.log('[say-test] selected Russian voice:', st.voiceRu)
-    for (const line of ['Сэр, сервер подключён. Все системы работают.', 'Сэр, Jarvis работает на Windows. Загрузка CPU составляет 25 процентов.']) {
+    console.log('[say-test] voices:', st.voiceRu, st.voiceEn)
+    for (const line of ['Добрый вечер, сэр. Все системы работают в штатном режиме.', 'Good evening, sir. Everything is in order.']) {
       const t0 = Date.now()
       await assistant.say(line)
       console.log(`[say-test] "${line.slice(0, 24)}…" done in ${Date.now() - t0}ms`)
@@ -753,7 +696,7 @@ app.whenReady().then(async () => {
   }
   if (process.env.JARVIS_TEST_ACK) {
     await new Promise((r) => setTimeout(r, 6000))
-    for (const lang of ['ru', 'ru']) {
+    for (const lang of ['ru', 'ru', 'en', 'en']) {
       const t0 = Date.now()
       await assistant.ack(lang)
       console.log(`[ack-test] ${lang} played in ${Date.now() - t0}ms`)

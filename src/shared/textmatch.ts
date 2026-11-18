@@ -42,14 +42,9 @@ export function normalize(s: string): string {
   return s
     .toLowerCase()
     .replace(/ё/g, 'е')
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/[^a-zа-я0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-}
-
-/** Corrections need interpretation before a fixed command or fuzzy routine can execute. */
-export function hasSpokenCorrection(text: string): boolean {
-  return /(?:^|\s)(нет|точнее|вернее|вместо|не надо|я имел в виду|no|actually|rather|instead|i mean)(?:\s|$)/.test(normalize(text))
 }
 
 export function translitToCyrillic(s: string): string {

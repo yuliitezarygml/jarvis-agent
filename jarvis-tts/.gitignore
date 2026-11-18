@@ -1,9 +1,0 @@
-.venv/
-venv/
-cache/
-refs/
-samples/
-*.wav
-*.mp3
-*.log
-__pycache__/

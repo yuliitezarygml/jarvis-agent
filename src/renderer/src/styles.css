@@ -288,16 +288,6 @@ button {
   position: relative;
   overflow: hidden;
 }
-.voice-focus-panel { padding: 18px; width: 100%; text-align: left; }
-.voice-focus-heading, .voice-focus-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.voice-focus-heading { justify-content: space-between; }
-.voice-focus-panel p { color: var(--text-2); font-size: 13px; line-height: 1.5; margin: 12px 0; }
-.voice-focus-panel blockquote { margin: 12px 0; padding: 12px; border-left: 2px solid var(--accent); background: rgba(56,214,255,.05); line-height: 1.6; font-size: 14px; }
-.voice-focus-panel progress { display: block; width: 100%; margin: 12px 0; accent-color: var(--accent); }
-.voice-focus-panel .focus-error { color: var(--danger); }
-.voice-focus-panel .focus-good { color: var(--ok); }
-.voice-focus-backdrop { position: fixed; inset: 0; z-index: 250; background: rgba(0,0,0,.65); display: flex; align-items: center; justify-content: center; padding: 24px; }
-.voice-focus-dialog { max-width: 540px; max-height: 90vh; overflow-y: auto; }
 .stage .state {
   font-family: var(--font-head);
   letter-spacing: 0.34em;

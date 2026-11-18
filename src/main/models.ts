@@ -1,17 +1,13 @@
-import { createWriteStream, existsSync, mkdirSync, rmSync, readdirSync, readFileSync, renameSync, statSync } from 'fs'
+import { createWriteStream, existsSync, mkdirSync, rmSync, readdirSync, renameSync, statSync } from 'fs'
 import { join, dirname } from 'path'
 import { spawn } from 'child_process'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
-import { createHash } from 'crypto'
 import { net } from 'electron'
 import type { ModelAsset, SetupProgress } from '../shared/types'
-import { isLegacyPiperConfig } from '../shared/piper-config'
 
 const GH = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models'
-// Keep model and config from one revision compatible with the bundled 2023.11.14 Piper CLI.
-// Upstream main retrained Denis for Piper 1.5 (multi-codepoint phonemes), which the CLI cannot load.
-const HF_PIPER = 'https://huggingface.co/rhasspy/piper-voices/resolve/a60bfb1358818a92675b3a2d9d48fb8ea47035c1'
+const HF_PIPER = 'https://huggingface.co/rhasspy/piper-voices/resolve/main'
 const HF_JARVIS = 'https://huggingface.co/jgkawell/jarvis/resolve/main/en/en_GB/jarvis'
 
 interface Def {
@@ -23,8 +19,7 @@ interface Def {
   note?: string
   /** folder (relative to models dir) that must exist to count as installed */
   check: string
-  piperConfig?: string
-  files?: { url: string; dest: string; sha256?: string }[]
+  files?: { url: string; dest: string }[]
   archive?: { url: string; type: 'tar' | 'zip'; into: string; stripTop?: boolean }
 }
 
@@ -38,7 +33,6 @@ const piper = (lang: string, region: string, speaker: string, quality: string, s
     sizeMB,
     required: false,
     check: `tts/voices/${id}.onnx`,
-    piperConfig: `tts/voices/${id}.onnx.json`,
     files: [
       { url: `${base}.onnx`, dest: `tts/voices/${id}.onnx` },
       { url: `${base}.onnx.json`, dest: `tts/voices/${id}.onnx.json` }
@@ -47,14 +41,6 @@ const piper = (lang: string, region: string, speaker: string, quality: string, s
 }
 
 export const CATALOG: Def[] = [
-  {
-    id: 'voxlock', name: 'VoxLock — personal voice focus', kind: 'vad', sizeMB: 76, required: false,
-    check: 'voice-focus', note: 'Local CPU filter. Requires your own recorded voice sample.',
-    files: [
-      { url: 'https://github.com/arbazsiddiqui/voxlock/releases/download/sherpa-onnx-models/voxlock_enroll.onnx', dest: 'voice-focus/voxlock_enroll.onnx', sha256: '5d06048c156bb8cd422d29848e6d38fb26a7b39f6f7fd92eccf2a6ed1ce003c6' },
-      { url: 'https://github.com/arbazsiddiqui/voxlock/releases/download/sherpa-onnx-models/voxlock_chunk_int8.onnx', dest: 'voice-focus/voxlock_chunk_int8.onnx', sha256: 'df61a9d0062b0adbcf1182302b1eb8b815f15ac47ea4923e8e164c1aff64121d' }
-    ]
-  },
   {
     id: 'silero-vad',
     name: 'Silero VAD',
@@ -76,7 +62,7 @@ export const CATALOG: Def[] = [
   },
   {
     id: 'whisper-base',
-    name: 'Whisper base (резервное распознавание)',
+    name: 'Whisper base (fallback English)',
     kind: 'stt',
     sizeMB: 198,
     required: false,
@@ -89,7 +75,7 @@ export const CATALOG: Def[] = [
     kind: 'stt',
     sizeMB: 156,
     required: true,
-    note: 'Основное распознавание русской речи',
+    note: 'Used automatically when Whisper detects Russian',
     check: 'stt/sherpa-onnx-nemo-ctc-punct-giga-am-v3-russian-2025-12-16',
     archive: { url: `${GH}/sherpa-onnx-nemo-ctc-punct-giga-am-v3-russian-2025-12-16.tar.bz2`, type: 'tar', into: 'stt' }
   },
@@ -98,7 +84,7 @@ export const CATALOG: Def[] = [
     name: 'Parakeet-TDT 110M (English, light + accurate)',
     kind: 'stt',
     sizeMB: 108,
-    required: false,
+    required: true,
     note: 'English recogniser: 3x faster and lighter than Whisper',
     check: 'stt/sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8',
     archive: { url: `${GH}/sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8.tar.bz2`, type: 'tar', into: 'stt' }
@@ -135,10 +121,9 @@ export const CATALOG: Def[] = [
     name: 'Jarvis (MCU-style, English) — high',
     kind: 'tts',
     sizeMB: 110,
-    required: false,
+    required: true,
     note: 'Community Piper model emulating the film voice',
     check: 'tts/voices/jarvis-high.onnx',
-    piperConfig: 'tts/voices/jarvis-high.onnx.json',
     files: [
       { url: `${HF_JARVIS}/high/jarvis-high.onnx`, dest: 'tts/voices/jarvis-high.onnx' },
       { url: `${HF_JARVIS}/high/jarvis-high.onnx.json`, dest: 'tts/voices/jarvis-high.onnx.json' }
@@ -151,7 +136,6 @@ export const CATALOG: Def[] = [
     sizeMB: 62,
     required: false,
     check: 'tts/voices/jarvis-medium.onnx',
-    piperConfig: 'tts/voices/jarvis-medium.onnx.json',
     files: [
       { url: `${HF_JARVIS}/medium/jarvis-medium.onnx`, dest: 'tts/voices/jarvis-medium.onnx' },
       { url: `${HF_JARVIS}/medium/jarvis-medium.onnx.json`, dest: 'tts/voices/jarvis-medium.onnx.json' }
@@ -168,6 +152,7 @@ export function modelsDir(base: string) {
 }
 
 export function listAssets(base: string): ModelAsset[] {
+  const dir = modelsDir(base)
   return CATALOG.map((d) => ({
     id: d.id,
     name: d.name,
@@ -175,35 +160,11 @@ export function listAssets(base: string): ModelAsset[] {
     sizeMB: d.sizeMB,
     required: d.required,
     note: d.note,
-    installed: assetInstalled(base, d)
+    installed: existsSync(join(dir, d.check))
   }))
 }
 
-const verifiedFiles = new Map<string, string>()
-function verifiedFile(file: string, sha256: string): boolean {
-  try {
-    const stat = statSync(file)
-    const signature = `${stat.size}:${stat.mtimeMs}:${sha256}`
-    if (verifiedFiles.get(file) === signature) return true
-    if (createHash('sha256').update(readFileSync(file)).digest('hex') !== sha256) return false
-    verifiedFiles.set(file, signature)
-    return true
-  } catch { return false }
-}
-
-function assetInstalled(base: string, def: Def): boolean {
-  const dir = modelsDir(base)
-  if (!existsSync(join(dir, def.check))) return false
-  if (def.files?.some((file) => file.sha256 && !verifiedFile(join(dir, file.dest), file.sha256))) return false
-  if (!def.piperConfig) return true
-  try {
-    return isLegacyPiperConfig(JSON.parse(readFileSync(join(dir, def.piperConfig), 'utf8')))
-  } catch {
-    return false
-  }
-}
-
-async function download(url: string, dest: string, onProgress: (received: number, total: number) => void, sha256?: string) {
+async function download(url: string, dest: string, onProgress: (received: number, total: number) => void) {
   mkdirSync(dirname(dest), { recursive: true })
   const tmp = dest + '.part'
   // Electron's network stack honours the system proxy (plain Node fetch doesn't)
@@ -217,7 +178,6 @@ async function download(url: string, dest: string, onProgress: (received: number
     onProgress(received, total)
   })
   await pipeline(src, createWriteStream(tmp))
-  if (sha256 && !verifiedFile(tmp, sha256)) { rmSync(tmp, { force: true }); throw new Error('Downloaded model checksum mismatch') }
   renameSync(tmp, dest)
 }
 
@@ -249,7 +209,7 @@ export async function installAsset(base: string, id: string, onProgress: (p: Set
           totals[i] = t
           const sum = (a: number[]) => a.reduce((x, y) => x + y, 0)
           onProgress({ id, phase: 'downloading', received: sum(sizes), total: Math.max(sum(totals), def.sizeMB * 1024 * 1024 * 0.98) })
-        }, f.sha256)
+        })
       }
     } else if (def.archive) {
       const tmp = join(dir, '_downloads', `${id}.${def.archive.type === 'zip' ? 'zip' : 'tar.bz2'}`)
@@ -258,7 +218,6 @@ export async function installAsset(base: string, id: string, onProgress: (p: Set
       await extract(tmp, join(dir, def.archive.into))
       rmSync(tmp, { force: true })
     }
-    if (!assetInstalled(base, def)) throw new Error(`Downloaded asset ${id} is incomplete or incompatible with the bundled engine`)
     onProgress({ id, phase: 'done', received: 1, total: 1 })
   } catch (e: any) {
     onProgress({ id, phase: 'error', received: 0, total: 0, error: String(e?.message || e) })
@@ -279,8 +238,6 @@ export function pathsFor(base: string) {
   }
   return {
     vad: sub('vad/silero_vad.onnx'),
-    focusEnroll: sub('voice-focus/voxlock_enroll.onnx'),
-    focusChunk: sub('voice-focus/voxlock_chunk_int8.onnx'),
     wakeDir: firstDir(sub('wake'), 'sherpa-onnx-streaming-zipformer-small-ru-vosk-int8'),
     gigaDir: sub('stt/sherpa-onnx-nemo-ctc-punct-giga-am-v3-russian-2025-12-16'),
     whisperDir: (kind: 'base' | 'small' | 'turbo') => sub(`stt/sherpa-onnx-whisper-${kind}`),

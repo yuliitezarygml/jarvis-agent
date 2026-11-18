@@ -5,8 +5,6 @@ import { EventEmitter } from 'events'
 import type { XttsSidecar } from './xtts'
 import { fishSynth, serverSynth, type FishConfig } from './fish'
 import { resourcePath } from './paths'
-import type { Lang } from '../shared/types'
-import { detectLanguage } from '../shared/language'
 
 /** Piper needs the VC++ runtime; the app ships it in resources/native/vcrt for PCs without the redistributable. */
 function piperEnv() {
@@ -89,7 +87,7 @@ class PiperVoice {
 export interface SpeakRequest {
   id: string
   text: string
-  lang: Lang
+  lang: 'ru' | 'en'
   voice: string
   speed: number
 }
@@ -120,16 +118,13 @@ export class Tts extends EventEmitter {
   }
 
   /** Synthesise one sentence → returns audio bytes (wav, or mp3 from the free server). */
-  async synth(text: string, voiceId: string, speed = 1, lang: Lang = 'ru'): Promise<Buffer> {
-    if (lang === 'ro') {
-      throw new Error('Romanian speech has been removed from this version')
-    }
+  async synth(text: string, voiceId: string, speed = 1, lang: 'ru' | 'en' = 'ru'): Promise<Buffer> {
     if (voiceId.startsWith('fish:')) {
       const f = this.fish!()
       const l = voiceId === 'fish:en' ? 'en' : 'ru'
       return f.mode === 'server' ? serverSynth(f, text, l, speed) : fishSynth(f, text, l, speed)
     }
-    if (voiceId.startsWith('xtts:')) return this.xtts!.synth(text, lang === 'ru' ? 'ru' : 'en', speed)
+    if (voiceId.startsWith('xtts:')) return this.xtts!.synth(text, lang, speed)
     let v = this.voices.get(voiceId)
     if (!v) {
       v = new PiperVoice(this.paths.piperExe, this.paths.voice(voiceId), this.tmpRoot, voiceId)
@@ -161,12 +156,11 @@ export class Tts extends EventEmitter {
 export function splitSentences(text: string): string[] {
   const clean = text.replace(/\s+/g, ' ').trim()
   if (!clean) return []
-  // A decimal point is not an utterance boundary: preserve values such as 3.14.
-  const parts = clean.split(/(?<=[.!?…])\s+/u)
+  const parts = clean.match(/[^.!?…]+[.!?…]*\s*/g) || [clean]
   const out: string[] = []
   let cur = ''
   for (const p of parts) {
-    cur += (cur ? ' ' : '') + p
+    cur += p
     if (cur.length >= 24) {
       out.push(cur.trim())
       cur = ''
@@ -190,4 +184,8 @@ export function speakable(text: string): string {
     .trim()
 }
 
-export const detectLang = detectLanguage
+export function detectLang(text: string): 'ru' | 'en' {
+  const cyr = (text.match(/[а-яё]/gi) || []).length
+  const lat = (text.match(/[a-z]/gi) || []).length
+  return cyr >= lat ? 'ru' : 'en'
+}

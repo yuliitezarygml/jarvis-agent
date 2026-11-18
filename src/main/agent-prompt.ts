@@ -57,8 +57,6 @@ export function buildSystemExtra(opts: {
   time: string
   custom: string
   connectors?: string[]
-  conversation?: boolean
-  interruption?: string
 }) {
   const routines = opts.routines.length
     ? opts.routines.map((r) => `- "${r.name}" ← ${r.phrases.map((p) => `«${p}»`).join(', ')} (${r.steps.length} steps)`).join('\n')
@@ -66,12 +64,8 @@ export function buildSystemExtra(opts: {
   return [
     `## Context`,
     `Now: ${opts.time}. Input by ${opts.via === 'voice' ? 'VOICE (answer aloud with jarvis_say)' : 'text'}. Language: ${opts.lang}. Screens: ${opts.screen}. Current model ${opts.vision ? 'CAN' : 'CANNOT'} view images.`,
-    opts.lang === 'Romanian' ? 'Write and speak natural Romanian with correct diacritics (ă, â, î, ș, ț), including words, titles and questions. Use comma-below ș/ț, never legacy cedillas ş/ţ. Do not transliterate Romanian into ASCII.' : '',
-    opts.lang === 'Russian' ? 'Write replies and jarvis_say speech in natural Russian. Latin product names, numeric results and quoted foreign text do not change the response language. For speech, explain their meaning concisely in Russian; keep exact identifiers in the written reply.' : '',
     `## Known facts about the user\n${opts.memory || '(nothing stored yet)'}`,
     `## Saved routines\n${routines}`,
-    opts.conversation ? '## Live conversation\nThe user enabled ongoing voice conversation. Keep replies concise and natural, preserve the topic across follow-ups, and leave room for the user to speak. Distinguish discussion or hypothetical examples from instructions to operate the PC. Only operate on an actual request; use the normal result checks and permissions. Never resume a task the user interrupted unless the new request asks for it.' : '',
-    opts.interruption ? `## Previous interruption\n${opts.interruption}` : '',
     opts.connectors?.length
       ? `## Connected services\nTools prefixed with these names are available: ${opts.connectors.join(', ')} (e.g. email, calendar, notes, code hosts). Use them whenever the request concerns that service instead of the browser. Reading/searching is free; before sending, deleting, inviting or changing anything call jarvis_ask unless the user clearly asked for exactly that. If a tool says it needs authentication, tell the user to open Settings → Connectors and sign in.`
       : '',

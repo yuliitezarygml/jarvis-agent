@@ -1,7 +1,6 @@
 // Hidden "audio host" page: microphone capture → main (speech engine), and TTS playback with the Jarvis polish chain.
 import { api, IPC } from './api'
 import type { Settings } from '@shared/types'
-import { AudioPlayback } from './playback'
 
 let settings: Settings | null = null
 let micCtx: AudioContext | null = null
@@ -73,6 +72,7 @@ function stopMic() {
 
 // ------------------------------------------------------------------ playback
 let outCtx: AudioContext | null = null
+let current: { src: AudioBufferSourceNode; id: string } | null = null
 let analyser: AnalyserNode | null = null
 let levelTimer: number | null = null
 
@@ -140,13 +140,29 @@ function stopLevels() {
   api.send(IPC.ttsLevel, 0)
 }
 
-const playback = new AudioPlayback({
-  context: ensureOut,
-  chain: jarvisChain,
-  startLevels,
-  stopLevels,
-  ended: (id, completed) => api.send(IPC.ttsEnded, id, completed)
-})
+async function play(req: { id: string; wav: Uint8Array; fx: boolean; volume: number }) {
+  const ctx = ensureOut()
+  if (ctx.state === 'suspended') await ctx.resume()
+  try {
+    const ab = req.wav.buffer.slice(req.wav.byteOffset, req.wav.byteOffset + req.wav.byteLength) as ArrayBuffer
+    const buf = await ctx.decodeAudioData(ab)
+    const src = ctx.createBufferSource()
+    src.buffer = buf
+    const chain = jarvisChain(ctx, req.fx, req.volume)
+    src.connect(chain.input)
+    current = { src, id: req.id }
+    src.onended = () => {
+      if (current?.id === req.id) current = null
+      stopLevels()
+      api.send(IPC.ttsEnded, req.id)
+    }
+    startLevels()
+    src.start()
+  } catch (e) {
+    console.error('playback failed', e)
+    api.send(IPC.ttsEnded, req.id)
+  }
+}
 
 function earcon(kind = 'wake') {
   if (settings && !settings.wakeSound) return
@@ -173,8 +189,12 @@ async function main() {
     settings = s
     if (changed) void startMic()
   })
-  api.on(IPC.ttsPlay, (req: any) => void playback.play(req))
-  api.on(IPC.ttsStop, () => playback.stop())
+  api.on(IPC.ttsPlay, (req: any) => void play(req))
+  api.on(IPC.ttsStop, () => {
+    try {
+      current?.src.stop()
+    } catch {}
+  })
   api.on('audio:earcon', (k: string) => earcon(k))
   await startMic()
 }

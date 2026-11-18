@@ -40,7 +40,7 @@ function Hud() {
         <AnimatePresence>
           {active && (
             <motion.div className="hud-state" initial={{ opacity: 0, x: right ? 10 : -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }} style={{ marginRight: right ? 14 : 0, marginLeft: right ? 0 : 14 }}>
-              {status.conversation ? t('conversation.active') + ' · ' : ''}{t(status.state === 'listening' && status.voiceDraft?.waiting ? 'state.waitingContinuation' : 'state.' + status.state)}
+              {t('state.' + status.state)}
             </motion.div>
           )}
         </AnimatePresence>

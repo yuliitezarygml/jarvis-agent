@@ -120,7 +120,6 @@ export async function bootstrap(opts: { chat?: boolean } = {}) {
 
 export function useT() {
   const pref = useApp((s) => s.settings.interfaceLang)
-  const language = useApp((s) => s.status.language || s.settings.lastInputLanguage)
-  const locale: Locale = resolveLocale(pref, language)
+  const locale: Locale = resolveLocale(pref)
   return { locale, t: (key: string, vars?: Record<string, string>) => translate(locale, key, vars) }
 }

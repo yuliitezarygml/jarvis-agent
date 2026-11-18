@@ -41,7 +41,6 @@ export class SettingsStore extends JsonStore<Settings> {
   constructor() {
     super(join(dataDir(), 'settings.json'), { ...DEFAULT_SETTINGS })
     this.data = { ...DEFAULT_SETTINGS, ...this.data }
-    delete (this.data as Settings & { voiceRo?: string }).voiceRo
   }
   get(): Settings {
     return this.data

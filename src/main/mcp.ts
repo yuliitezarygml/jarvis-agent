@@ -126,15 +126,8 @@ export class JarvisMcp {
   /** app / window the agent last acted on: keystrokes and window tools default to it */
   private lastApp = ''
   private lastWindow = 0
-  private accepting = true
-
-  pause() {
-    this.accepting = false
-    this.computer.cancel()
-  }
 
   newTask() {
-    this.accepting = true
     this.computer.reset()
     this.lastApp = ''
     this.lastWindow = 0
@@ -152,14 +145,8 @@ export class JarvisMcp {
         return
       }
       try {
-        const requestEpoch = this.computer.begin()
         const body = req.method === 'POST' ? await readBody(req) : undefined
-        const rpc = body as { method?: string; id?: string | number } | undefined
-        if (rpc?.method === 'tools/call' && (!this.accepting || requestEpoch !== this.computer.begin())) {
-          res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result: err('Cancelled: the user interrupted this task. Do not retry or resume it.') }))
-          return
-        }
-        const server = this.buildServer(requestEpoch)
+        const server = this.buildServer()
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
         res.on('close', () => {
           transport.close()
@@ -231,7 +218,7 @@ export class JarvisMcp {
   }
 
   // ------------------------------------------------------------------ server
-  private buildServer(requestEpoch = this.computer.begin()) {
+  private buildServer() {
     const s = new McpServer({ name: 'jarvis', version: '2.0.0' })
     const h = this.hub
     const c = this.computer
@@ -249,9 +236,7 @@ export class JarvisMcp {
         }
       },
       async ({ text: t, highlight, wait }) => {
-        c.check(requestEpoch)
         const targets = highlight?.length ? await this.resolveTargets(highlight) : []
-        c.check(requestEpoch)
         const speaking = h.say(t, targets)
         // by default speech runs in the background so the agent never waits for audio; a stuck audio path can't block it either
         if (wait) await Promise.race([speaking, new Promise((r) => setTimeout(r, 45000))])
@@ -266,9 +251,7 @@ export class JarvisMcp {
         inputSchema: { question: z.string(), options: z.array(z.string()).optional(), highlight: z.array(targetSchema).optional() }
       },
       async ({ question, options, highlight }) => {
-        c.check(requestEpoch)
         if (highlight?.length) h.highlight(await this.resolveTargets(highlight), 60000)
-        c.check(requestEpoch)
         const a = await h.ask(question, options)
         h.clearHighlight()
         return text(a ? `User answered: ${a}` : 'The user did not answer in time.')
@@ -558,17 +541,12 @@ export class JarvisMcp {
       return { x: Math.round(hit.rect.x + hit.rect.w / 2), y: Math.round(hit.rect.y + hit.rect.h / 2) }
     }
     const held = new Set<string>()
-    const heldButtons = new Set<string>()
     const releaseAll = async () => {
       for (const k of [...held]) {
         const [keys, scan] = k.split('|')
         await h.win.call('keyup', { keys, scan: scan === '1' }).catch(() => {})
         held.delete(k)
       }
-      for (const button of heldButtons) {
-        await h.win.call('mousebtn', { button, state: 'up' }).catch(() => {})
-      }
-      heldButtons.clear()
     }
     const holdFor = async (ms: number, ep: number) => {
       for (let left = ms; left > 0; left -= 200) {
@@ -650,8 +628,6 @@ export class JarvisMcp {
         case 'mouse_up': {
           const p = st.x !== undefined || st.target ? await pointOf(st.x, st.y, st.target, st.do) : undefined
           await h.win.call('mousebtn', { ...(p ?? {}), button: st.button ?? 'left', state: st.do === 'mouse_down' ? 'down' : 'up' })
-          if (st.do === 'mouse_down') heldButtons.add(st.button ?? 'left')
-          else heldButtons.delete(st.button ?? 'left')
           return `${st.do} ${st.button ?? 'left'}`
         }
         case 'scroll': {

@@ -1,12 +1,10 @@
 import { ReactNode, useEffect, useState } from 'react'
 import { Bot, Plug, Download, Eye, Info, Mic, SlidersHorizontal, Cpu, Volume2, X, Check } from 'lucide-react'
 import type { Settings, UpdateState } from '@shared/types'
-import { DEFAULT_SETTINGS } from '@shared/types'
 import { api, IPC } from '../api'
 import { useApp, useT } from '../store'
 import { ProviderPanel, openUrl } from '../components/ProviderPanel'
 import { ConnectorsPanel } from '../components/ConnectorsPanel'
-import { VoiceFocusPanel } from '../components/VoiceFocusPanel'
 
 type Tab = 'general' | 'agent' | 'connectors' | 'listening' | 'voice' | 'models' | 'about'
 const TABS: { id: Tab; icon: typeof Bot; label: string; desc: string }[] = [
@@ -161,6 +159,7 @@ export function SettingsPage() {
 
   const voices = assets.filter((a) => a.kind === 'tts' && a.id !== 'piper-runtime' && a.installed)
   const ruVoices = voices.filter((v) => v.id.startsWith('ru_') || v.id.includes('-ru'))
+  const enVoices = voices.filter((v) => v.id.startsWith('jarvis'))
   const preview = (voice: string, text: string) => api.invoke('voice:preview', text, voice)
 
   const modelList = models.length ? models : []
@@ -221,7 +220,7 @@ export function SettingsPage() {
                     <Seg value={s.theme} options={[['dark', 'Dark'], ['light', 'Light'], ['system', 'Auto']]} onChange={(v) => patch({ theme: v })} />
                   </Row>
                   <Row label={t('settings.language')}>
-                    <span>Русский</span>
+                    <Seg value={s.interfaceLang} options={[['auto', 'Auto'], ['ru', 'RU'], ['en', 'EN']]} onChange={(v) => patch({ interfaceLang: v })} />
                   </Row>
                 </Group>
                 <Group title={t('sg.startup')}>
@@ -298,7 +297,6 @@ export function SettingsPage() {
 
             {tab === 'listening' && (
               <>
-                <VoiceFocusPanel />
                 <Group title={t('sg.wake')}>
                   <Row label={t('settings.wakeEnabled')}>
                     <Switch on={s.wakeEnabled} onChange={(v) => patch({ wakeEnabled: v })} />
@@ -323,12 +321,6 @@ export function SettingsPage() {
                   <Row label={t('settings.listenWindow')} hint={t('settings.listenWindowHint')}>
                     <Slider value={s.followupSeconds} min={3} max={15} step={1} onChange={(v) => patch({ followupSeconds: v })} />
                   </Row>
-                  <Row label={t('settings.commandPause')} hint={t('settings.commandPauseHint')}>
-                    <Slider value={s.commandPauseSeconds} min={1} max={10} step={0.5} onChange={(v) => patch({ commandPauseSeconds: v })} />
-                  </Row>
-                  <Row label={t('settings.conversationIdle')} hint={t('settings.conversationIdleHint')}>
-                    <Slider value={s.conversationIdleSeconds} min={30} max={600} step={30} onChange={(v) => patch({ conversationIdleSeconds: v })} />
-                  </Row>
                 </Group>
                 <Group title={t('sg.recognition')}>
                   <Row label={t('settings.mic')}>
@@ -342,10 +334,10 @@ export function SettingsPage() {
                     </select>
                   </Row>
                   <Row label={t('settings.stt')}>
-                    <span>GigaAM · русский</span>
+                    <Seg value={s.sttModel} options={[['parakeet-en', 'Parakeet'], ['whisper-base', 'Whisper base'], ['whisper-small', 'small'], ['whisper-turbo', 'turbo']]} onChange={(v) => patch({ sttModel: v })} />
                   </Row>
                   <Row label={t('settings.sttLang')}>
-                    <span>Русский</span>
+                    <Seg value={s.sttLanguage} options={[['auto', 'Auto'], ['ru', 'RU'], ['en', 'EN']]} onChange={(v) => patch({ sttLanguage: v })} />
                   </Row>
                 </Group>
                 <Group title={t('sg.shortcut')}>
@@ -415,6 +407,9 @@ export function SettingsPage() {
                     <Row label={t('settings.fishRu')}>
                       <input className="input" defaultValue={s.fishVoiceRu} placeholder="reference_id" onBlur={(e) => patch({ fishVoiceRu: e.target.value.trim() })} />
                     </Row>
+                    <Row label={t('settings.fishEn')}>
+                      <input className="input" defaultValue={s.fishVoiceEn} placeholder="reference_id" onBlur={(e) => patch({ fishVoiceEn: e.target.value.trim() })} />
+                    </Row>
                   </Group>
                 )}
 
@@ -437,12 +432,32 @@ export function SettingsPage() {
                         {t('settings.preview')}
                       </button>
                     </Row>
+                    <Row label={t('settings.voiceEn')}>
+                      <select className="select" value={s.voiceEn} onChange={(e) => patch({ voiceEn: e.target.value })}>
+                        {extra.filter((v) => v.lang !== 'ru' && !v.id.startsWith('fish')).map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.name}
+                          </option>
+                        ))}
+                        {enVoices.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button className="btn sm" onClick={() => preview(s.voiceEn, 'Good evening, sir. All systems are running at full capacity.')}>
+                        {t('settings.preview')}
+                      </button>
+                    </Row>
                   </Group>
                 ) : (
                   <Group title={t('sg.voices')}>
                     <Row label={t('voice.preview')}>
                       <button className="btn sm" onClick={() => preview(s.voiceRu, 'Добрый день, сэр. Все системы работают в штатном режиме.')}>
                         RU · {t('settings.preview')}
+                      </button>
+                      <button className="btn sm" onClick={() => preview(s.voiceEn, 'Good evening, sir. All systems are running at full capacity.')}>
+                        EN · {t('settings.preview')}
                       </button>
                     </Row>
                   </Group>
@@ -453,7 +468,7 @@ export function SettingsPage() {
                     <summary>{t('voice.advanced')}</summary>
                     <Group>
                       <Row label={t('voice.serverUrl')}>
-                        <input className="input" defaultValue={s.ttsServerUrl} onBlur={(e) => patch({ ttsServerUrl: e.target.value.trim() || DEFAULT_SETTINGS.ttsServerUrl })} />
+                        <input className="input" defaultValue={s.ttsServerUrl} onBlur={(e) => patch({ ttsServerUrl: e.target.value.trim() || 'https://jarvis-tts-jade.vercel.app' })} />
                       </Row>
                     </Group>
                   </details>

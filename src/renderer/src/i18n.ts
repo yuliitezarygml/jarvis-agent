@@ -1,6 +1,3 @@
-import { interfaceLanguage } from '../../shared/language'
-import { ro } from './ro'
-import { voiceFocusText } from './voice-focus-i18n'
 export type Dict = Record<string, string>
 
 const en: Dict = {
@@ -11,21 +8,11 @@ const en: Dict = {
   'state.idle': 'Standing by',
   'state.wake': 'Yes?',
   'state.listening': 'Listening',
-  'state.waitingContinuation': 'Waiting for you to continue',
-  'conversation.active': 'Conversation',
-  'conversation.hint': 'Speak without the wake word. You can interrupt. Say “end the conversation” to finish.',
-  'conversation.end': 'Conversation active · End',
-  'settings.conversationIdle': 'End conversation after inactivity (seconds)',
-  'settings.conversationIdleHint': 'Say “Jarvis, let’s talk” to start, and “end the conversation” to finish. The idle timer waits while you or Jarvis are speaking or a task is running.',
   'state.transcribing': 'Understanding',
   'state.thinking': 'Working on it',
   'state.speaking': 'Speaking',
   'state.error': 'Something went wrong',
   'home.hint': 'Say “Jarvis” or press {hotkey}',
-  'home.agent': 'agent', 'home.voice': 'voice', 'chat.voice': 'voice',
-  'home.modelsMissing': 'models missing', 'home.wakeOff': 'wake off', 'home.controlling': 'controlling PC',
-  'settings.languageHint': 'Auto follows the language of your request (RU/RO/EN) and remembers it between launches.',
-  'settings.sttLangHint': 'Auto uses Whisper to distinguish Russian, Romanian and English. Pinned RU/EN use the fast specialised recognisers.',
   'home.placeholder': 'Ask Jarvis anything, or give an order…',
   'home.empty.title': 'At your service.',
   'home.empty.sub': 'I can see your screen, point at things, control your PC and remember what matters.',
@@ -168,7 +155,7 @@ const en: Dict = {
   'settings.wakePhrases': 'Wake phrases',
   'settings.wakeSens': 'Sensitivity',
   'settings.mic': 'Microphone',
-  'settings.stt': 'Recognition model',
+  'settings.stt': 'English recogniser (Russian always uses GigaAM)',
   'settings.sttLang': 'Recognition language',
   'settings.hotkey': 'Push-to-talk hotkey',
   'settings.ack': 'Say "Yes, sir" when triggered',
@@ -178,8 +165,6 @@ const en: Dict = {
   'settings.ack.off': 'Off',
   'settings.listenWindow': 'Listening window after wake word',
   'settings.listenWindowHint': 'Jarvis stops listening after this many seconds of silence',
-  'settings.commandPause': 'Pause within a voice command (seconds)',
-  'settings.commandPauseHint': 'Wait before submitting a complete command. Incomplete phrases wait up to 20 seconds. Say “дай подумать” or “let me think” for more time.',
   'settings.voice': 'Voice',
   'settings.voiceEnabled': 'Speak responses',
   'settings.voiceRu': 'Russian voice',
@@ -220,7 +205,7 @@ const en: Dict = {
   'prov.restarting': 'Restarting the agent with the new endpoint…',
   'settings.voiceEngine': 'Voice engine',
   'voice.source': 'Where the voice comes from',
-  'voice.source.server': 'Voice from the selected speech server. You can use the shared server or your own server.',
+  'voice.source.server': 'The Jarvis voice from our free server — nothing to set up. Sentences are sent to the server and Fish Audio to be spoken.',
   'voice.source.custom': 'Use your own Fish Audio API key (and any voices you like).',
   'voice.source.local': 'Everything on this PC: Piper (fast, offline) or the cloned voice on an NVIDIA GPU.',
   'voice.mode.server': 'Server (free)',
@@ -228,7 +213,7 @@ const en: Dict = {
   'voice.mode.local': 'Local',
   'voice.serverStatus': 'Server status',
   'voice.server.ok': 'Online',
-  'voice.server.down': 'Unavailable — selected voice paused',
+  'voice.server.down': 'Unavailable — using the local voice',
   'voice.localEngine': 'Local engine',
   'voice.preview': 'Listen',
   'voice.advanced': 'Advanced',
@@ -296,21 +281,11 @@ const ru: Dict = {
   'state.idle': 'Жду команды',
   'state.wake': 'Слушаю?',
   'state.listening': 'Слушаю',
-  'state.waitingContinuation': 'Жду продолжения',
-  'conversation.active': 'Разговор',
-  'conversation.hint': 'Говори без имени. Можно перебить. Для выхода скажи «закончим разговор».',
-  'conversation.end': 'Разговор включён · Завершить',
-  'settings.conversationIdle': 'Завершать разговор после тишины (секунды)',
-  'settings.conversationIdleHint': 'Скажи «Джарвис, давай пообщаемся» для входа и «закончим разговор» для выхода. Таймер ждёт, пока ты или Jarvis говорите либо выполняется задача.',
   'state.transcribing': 'Распознаю',
   'state.thinking': 'Работаю',
   'state.speaking': 'Говорю',
   'state.error': 'Что-то пошло не так',
   'home.hint': 'Скажите «Джарвис» или нажмите {hotkey}',
-  'home.agent': 'агент', 'home.voice': 'голос', 'chat.voice': 'голос',
-  'home.modelsMissing': 'нет моделей', 'home.wakeOff': 'активация выключена', 'home.controlling': 'управляю ПК',
-  'settings.languageHint': 'Авто следует языку твоего запроса (RU/RO/EN) и сохраняет его между запусками.',
-  'settings.sttLangHint': 'Авто различает русский, румынский и английский через Whisper. Фиксированные RU/EN используют быстрые специализированные распознаватели.',
   'home.placeholder': 'Спросите Джарвиса или дайте команду…',
   'home.empty.title': 'К вашим услугам.',
   'home.empty.sub': 'Я вижу экран, могу показать на нём нужное, управляю ПК и помню важное.',
@@ -453,7 +428,7 @@ const ru: Dict = {
   'settings.wakePhrases': 'Фразы активации',
   'settings.wakeSens': 'Чувствительность',
   'settings.mic': 'Микрофон',
-  'settings.stt': 'Модель распознавания',
+  'settings.stt': 'Английский распознаватель (русский — всегда GigaAM)',
   'settings.sttLang': 'Язык распознавания',
   'settings.hotkey': 'Горячая клавиша',
   'settings.ack': 'Говорить «Да, сэр» при активации',
@@ -463,8 +438,6 @@ const ru: Dict = {
   'settings.ack.off': 'Выкл',
   'settings.listenWindow': 'Окно прослушивания после активации',
   'settings.listenWindowHint': 'Джарвис перестаёт слушать после стольких секунд тишины',
-  'settings.commandPause': 'Пауза внутри команды (секунды)',
-  'settings.commandPauseHint': 'Ожидание перед выполнением законченной команды. Незавершённую фразу жду до 20 секунд. Скажи «дай подумать», если нужно больше времени.',
   'settings.voice': 'Голос',
   'settings.voiceEnabled': 'Озвучивать ответы',
   'settings.voiceRu': 'Русский голос',
@@ -505,15 +478,15 @@ const ru: Dict = {
   'prov.restarting': 'Перезапускаю агента с новым endpoint…',
   'settings.voiceEngine': 'Движок голоса',
   'voice.source': 'Откуда берётся голос',
-  'voice.source.server': 'Голос с выбранного сервера озвучки. Можно использовать общий сервер или свой.',
+  'voice.source.server': 'Голос Джарвиса с нашего бесплатного сервера — ничего настраивать не нужно. Фразы отправляются на сервер и в Fish Audio для озвучки.',
   'voice.source.custom': 'Свой API-ключ Fish Audio (и любые голоса).',
   'voice.source.local': 'Всё на этом ПК: Piper (быстро, офлайн) или клон голоса на видеокарте NVIDIA.',
-  'voice.mode.server': 'Свой сервер голоса',
+  'voice.mode.server': 'Сервер (бесплатно)',
   'voice.mode.custom': 'Свой ключ',
   'voice.mode.local': 'Локально',
   'voice.serverStatus': 'Состояние сервера',
   'voice.server.ok': 'Работает',
-  'voice.server.down': 'Недоступен — озвучка приостановлена',
+  'voice.server.down': 'Недоступен — говорю локальным голосом',
   'voice.localEngine': 'Локальный движок',
   'voice.preview': 'Прослушать',
   'voice.advanced': 'Дополнительно',
@@ -573,14 +546,12 @@ const ru: Dict = {
   'ui.send': 'Отправить'
 }
 
-Object.assign(en, voiceFocusText.en)
-Object.assign(ru, voiceFocusText.ru)
-Object.assign(ro, voiceFocusText.ro)
-export const dicts = { en, ru, ro }
+export const dicts = { en, ru }
 export type Locale = keyof typeof dicts
 
-export function resolveLocale(pref: string, input = '', system = typeof navigator === 'undefined' ? 'en' : navigator.language): Locale {
-  return interfaceLanguage(pref, input, system)
+export function resolveLocale(pref: string): Locale {
+  if (pref === 'ru' || pref === 'en') return pref
+  return navigator.language.toLowerCase().startsWith('ru') ? 'ru' : 'en'
 }
 
 export function translate(locale: Locale, key: string, vars?: Record<string, string>) {

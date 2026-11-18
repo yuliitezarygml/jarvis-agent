@@ -1,4 +1,4 @@
-export type Lang = 'ru' | 'ro' | 'en'
+export type Lang = 'ru' | 'en'
 export type AssistantState = 'idle' | 'wake' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'error'
 
 export interface Settings {
@@ -8,9 +8,7 @@ export interface Settings {
   wakeEnabled: boolean
   wakeSensitivity: number // 0..1, fuzzy threshold strictness
   interfaceLang: Lang | 'auto'
-  lastInputLanguage: Lang | ''
   micDeviceId: string
-  voiceFocusEnabled: boolean
   sttModel: 'parakeet-en' | 'whisper-base' | 'whisper-small' | 'whisper-turbo'
   sttLanguage: 'auto' | Lang
   voiceEnabled: boolean
@@ -29,9 +27,6 @@ export interface Settings {
   hudCorner: 'br' | 'bl' | 'tr' | 'tl'
   cwd: string
   followupSeconds: number
-  /** Quiet time before a complete voice command is submitted; unfinished phrases wait longer. */
-  commandPauseSeconds: number
-  conversationIdleSeconds: number
   autoNewThreadMinutes: number
   /** unload the agent server after this many idle minutes (0 = keep it running) */
   agentIdleMinutes: number
@@ -69,18 +64,16 @@ export const DEFAULT_SETTINGS: Settings = {
   wakePhrases: ['джарвис', 'jarvis'],
   wakeEnabled: true,
   wakeSensitivity: 0.6,
-  interfaceLang: 'ru',
-  lastInputLanguage: '',
+  interfaceLang: 'auto',
   micDeviceId: 'default',
-  voiceFocusEnabled: false,
-  sttModel: 'whisper-base',
-  sttLanguage: 'ru',
+  sttModel: 'parakeet-en',
+  sttLanguage: 'auto',
   voiceEnabled: true,
   voiceRu: 'fish:ru',
   voiceEn: 'fish:en',
   voiceSpeed: 1,
   voiceVolume: 0.9,
-  voiceFx: false,
+  voiceFx: true,
   hotkey: 'Control+Alt+J',
   accent: '#38d6ff',
   theme: 'dark',
@@ -91,8 +84,6 @@ export const DEFAULT_SETTINGS: Settings = {
   hudCorner: 'br',
   cwd: '',
   followupSeconds: 7,
-  commandPauseSeconds: 1.5,
-  conversationIdleSeconds: 120,
   autoNewThreadMinutes: 45,
   agentIdleMinutes: 10,
   freeBlocked: {},
@@ -100,7 +91,7 @@ export const DEFAULT_SETTINGS: Settings = {
   visionModel: 'auto',
   cloneOffered: false,
   voiceMode: 'server',
-  ttsServerUrl: 'http://192.168.50.38:8080',
+  ttsServerUrl: 'https://jarvis-tts-jade.vercel.app',
   installId: '',
   voiceModeSet: false,
   fishApiKey: '',
@@ -272,13 +263,10 @@ export interface SetupProgress {
 
 export interface AppStatus {
   state: AssistantState
-  language?: Lang
   opencode: 'starting' | 'ready' | 'error' | 'stopped' | 'sleeping'
   speech: 'loading' | 'ready' | 'error' | 'missing-models'
   tts: 'ready' | 'missing-voice' | 'error'
   listeningForWake: boolean
-  voiceDraft?: { text: string; waiting: boolean }
-  conversation?: boolean
   message?: string
   activity?: string
   /** the last steps of the running task (newest last) and when the task started */
@@ -304,7 +292,6 @@ export const IPC = {
   chatHistory: 'chat:history',
   sendText: 'chat:send',
   abort: 'chat:abort',
-  conversationEnd: 'conversation:end',
   models: 'models:list',
   modelAssets: 'assets:list',
   modelDownload: 'assets:download',
@@ -313,12 +300,6 @@ export const IPC = {
   permissionReply: 'permission:reply',
   permissionClose: 'permission:close',
   audioChunk: 'audio:chunk',
-  voiceFocusGet: 'voice-focus:get',
-  voiceFocusPrepare: 'voice-focus:prepare',
-  voiceFocusChanged: 'voice-focus:changed',
-  voiceFocusRecord: 'voice-focus:record',
-  voiceFocusCancel: 'voice-focus:cancel',
-  voiceFocusRemove: 'voice-focus:remove',
   micLevel: 'audio:level',
   transcript: 'stt:transcript',
   ttsPlay: 'tts:play',
