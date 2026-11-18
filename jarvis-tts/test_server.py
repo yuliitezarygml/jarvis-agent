@@ -2,9 +2,11 @@ import concurrent.futures
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from server import acute_stress, create_app
+from server import Engine, SpeechRequest, acute_stress, create_app
 
 
 class FakeEngine:
@@ -73,8 +75,41 @@ class VoiceApiTests(unittest.TestCase):
 
     def test_failed_synthesis_releases_queue_for_next_request(self):
         self.engine.fail = True
-        self.assertEqual(self.client.post('/api/tts', json={'text': 'Проверка'}).status_code, 500)
+        with self.assertLogs('jarvis-tts', level='ERROR'):
+            self.assertEqual(self.client.post('/api/tts', json={'text': 'Проверка'}).status_code, 500)
         self.assertEqual(self.client.post('/api/tts', json={'text': 'Повторная проверка'}).status_code, 200)
+
+    def test_cancelled_stream_finishes_decoder_before_releasing_model_lock(self):
+        import numpy as np
+        engine = Engine()
+        engine.accent = lambda text: text
+        engine.normalizer = SimpleNamespace(norm=lambda text: text)
+        engine.voice = {}
+        stop = threading.Event()
+        joined = []
+
+        class Chunk:
+            def detach(self): return self
+            def cpu(self): return self
+            def numpy(self): return np.zeros(2400, dtype='float32')
+
+        class Model:
+            sample_rate = 24000
+            def generate_audio_stream(self, *args, **kwargs):
+                yield Chunk()
+                stop.set()
+                yield Chunk()
+                self_test.assertTrue(engine.lock.locked())
+                joined.append(True)
+
+        self_test = self
+        engine.model = Model()
+        with self.assertRaises(HTTPException) as error:
+            engine.synth(SpeechRequest(text='Проверка'), stop)
+        self.assertEqual(error.exception.status_code, 499)
+        self.assertEqual(joined, [True])
+        self.assertFalse(engine.lock.locked())
+        self.assertEqual(engine.cache, {})
 
 
 if __name__ == '__main__':

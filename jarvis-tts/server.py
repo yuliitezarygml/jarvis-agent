@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 log = logging.getLogger('jarvis-tts')
 ROOT = Path(os.environ.get('JARVIS_TTS_HOME', '/opt/jarvis-tts'))
-MODEL_CONFIG = 'hf://ArtShtorm/Shtorm-PocketTTS-RU/config_fast.yaml@33f6c328d62c4da5c1227bbe081e89b574a6183a'
+MODEL_CONFIG = str(ROOT / 'cache/model-config.yaml')
 
 
 def acute_stress(text: str) -> str:
@@ -79,15 +79,20 @@ class Engine:
             rate = self.model.sample_rate
             # The library splits long text by tokens. Accented Russian requires
             # shorter chunks than English; never truncate a string by characters.
+            limit_hit = False
             for chunk in self.model.generate_audio_stream(self.voice, prepared, max_tokens=50, stop=stop):
                 if stop.is_set():
-                    raise HTTPException(499, 'Request cancelled')
+                    # Drain the cancelled iterator so its decoder thread joins
+                    # before the model lock is released for another request.
+                    continue
                 data = chunk.detach().cpu().numpy()
                 chunks.append(data)
                 size += data.size
                 if size > rate * 90:
+                    limit_hit = True
                     stop.set()
-                    raise HTTPException(422, 'Speech exceeds the 90-second request limit')
+            if limit_hit:
+                raise HTTPException(422, 'Speech exceeds the 90-second request limit')
             if stop.is_set():
                 raise HTTPException(499, 'Request cancelled')
             if not chunks:
@@ -137,7 +142,7 @@ def create_app(engine=None, *, load=True) -> FastAPI:
 
     @app.get('/api/health')
     async def health():
-        return {'ok': engine.ready, 'engine': 'pocket-tts-ru', 'voice': 'Jarvis RU clone', 'languages': ['ru'], 'external_tts': False, 'notice': ''}
+        return {'ok': engine.ready, 'engine': 'pocket-tts-ru', 'model': 'Shtorm-PocketTTS-RU fast', 'voice': 'Jarvis RU clone', 'languages': ['ru'], 'external_tts': False, 'notice': ''}
 
     @app.post('/api/tts')
     async def tts(body: SpeechRequest, request: Request):

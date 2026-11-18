@@ -20,6 +20,7 @@ import { buildSystemExtra } from './agent-prompt'
 import { matchFast } from './fast-commands'
 import { pathsFor } from './models'
 import { conversationControl } from '../shared/conversation'
+import { voiceCacheKey } from './voice-cache'
 
 let idSeq = 0
 const uid = () => `x${Date.now().toString(36)}${(idSeq++).toString(36)}`
@@ -411,8 +412,7 @@ export class Assistant extends EventEmitter implements Hub {
   /** Remote (paid/quota) voices keep their acknowledgement lines on disk. */
   private ackDiskPath(voice: string, line: string): string | null {
     if (!voice.startsWith('fish:')) return null
-    const id = voice === 'fish:en' ? this.settings().fishVoiceEn : this.settings().fishVoiceRu
-    const h = createHash('sha1').update(`${voice}|${id}|${this.settings().fishModel}|${line}`).digest('hex').slice(0, 16)
+    const h = createHash('sha1').update(voiceCacheKey(this.settings(), voice, line)).digest('hex').slice(0, 16)
     return join(dataDir(), 'ack-cache', `${h}.wav`)
   }
 
@@ -435,7 +435,7 @@ export class Assistant extends EventEmitter implements Hub {
         if (voice.startsWith('xtts:') && this.xtts.state !== 'ready') continue
         if (lang === 'ru' && (voice.startsWith('xtts:') || voice.startsWith('fish:')) && this.realAckClips().length) continue // real clips are used instead
         for (const line of Assistant.ACK[lang]) {
-          const key = `${voice}|${line}`
+          const key = voiceCacheKey(s, voice, line)
           if (this.ackCache.has(key)) continue
           try {
             const disk = this.ackDiskPath(voice, line)
@@ -476,7 +476,7 @@ export class Assistant extends EventEmitter implements Hub {
       } else if (this.tts.available(voice)) {
         const lines = Assistant.ACK[lang].filter((l) => l !== this.lastAck)
         const line = lines[Math.floor(Math.random() * lines.length)]
-        wav = this.ackCache.get(`${voice}|${line}`)
+        wav = this.ackCache.get(voiceCacheKey(s, voice, line))
         if (!wav) {
           // not pre-built yet (cloned voice still loading): use the fast Piper voice rather than make the user wait
           const fb = this.fallbackVoice(lang)
