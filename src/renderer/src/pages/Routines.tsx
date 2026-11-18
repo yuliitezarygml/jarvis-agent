@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useReducer, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Edit3, Mic, Play, Plus, Trash2, X } from 'lucide-react'
 import type { Routine, RoutineStep } from '@shared/types'
 import { api, IPC } from '../api'
 import { STEP_TYPES, STEP_HINT, parseStep, stepText } from '@shared/routine-steps'
 import { useApp, useT } from '../store'
+import { routineEditorReducer, routineEditorRows } from '../routine-editor'
 
 const blank = (type: RoutineStep['type']): RoutineStep => parseStep(type, type === 'wait' ? '500' : '')
 
@@ -13,9 +14,7 @@ function Editor({ initial, onClose }: { initial: Partial<Routine>; onClose: () =
   const [name, setName] = useState(initial.name ?? '')
   const [phrases, setPhrases] = useState<string[]>(initial.phrases ?? [])
   const [draft, setDraft] = useState('')
-  const [steps, setSteps] = useState<RoutineStep[]>(initial.steps ?? [blank('say')])
-  // raw text while typing ("640,3" must not be normalised mid-edit)
-  const [drafts, setDrafts] = useState<Record<number, string>>({})
+  const [rows, editRows] = useReducer(routineEditorReducer, initial.steps ?? [blank('say')], routineEditorRows)
   const addPhrase = () => {
     const p = draft.trim()
     if (p && !phrases.includes(p)) setPhrases([...phrases, p])
@@ -23,7 +22,7 @@ function Editor({ initial, onClose }: { initial: Partial<Routine>; onClose: () =
   }
   const save = async () => {
     if (!name.trim() || !phrases.length) return
-    await api.invoke(IPC.routinesSave, { id: initial.id, name: name.trim(), phrases, steps })
+    await api.invoke(IPC.routinesSave, { id: initial.id, name: name.trim(), phrases, steps: rows.map((row) => row.step) })
     await useApp.getState().loadRoutines()
     onClose()
   }
@@ -46,9 +45,11 @@ function Editor({ initial, onClose }: { initial: Partial<Routine>; onClose: () =
           <input value={draft} placeholder="+" onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => (e.key === 'Enter' || e.key === ',') && (e.preventDefault(), addPhrase())} onBlur={addPhrase} />
         </div>
         <label className="field-label">{t('routines.steps')}</label>
-        {steps.map((s, i) => (
-          <div className="step-edit" key={i}>
-            <select className="select" value={s.type} onChange={(e) => setSteps(steps.map((x, j) => (j === i ? blank(e.target.value as RoutineStep['type']) : x)))}>
+        {rows.map((row, i) => {
+          const s = row.step
+          return (
+          <div className="step-edit" key={row.id}>
+            <select className="select" value={s.type} onChange={(e) => editRows({ type: 'kind', id: row.id, kind: e.target.value as RoutineStep['type'] })}>
               {STEP_TYPES.map((x) => (
                 <option key={x} value={x}>
                   {t('step.' + x)}
@@ -58,11 +59,8 @@ function Editor({ initial, onClose }: { initial: Partial<Routine>; onClose: () =
             <input
               className="input"
               placeholder={STEP_HINT[s.type][locale === 'ru' ? 0 : 1]}
-              value={drafts[i] ?? stepText(s)}
-              onChange={(e) => {
-                setDrafts({ ...drafts, [i]: e.target.value })
-                setSteps(steps.map((x, j) => (j === i ? parseStep(x.type, e.target.value, x.after) : x)))
-              }}
+              value={row.draft ?? stepText(s)}
+              onChange={(e) => editRows({ type: 'text', id: row.id, text: e.target.value })}
             />
             <input
               className="input after"
@@ -72,17 +70,18 @@ function Editor({ initial, onClose }: { initial: Partial<Routine>; onClose: () =
               title={t('routines.afterHint')}
               placeholder={t('routines.after')}
               value={s.after ?? ''}
-              onChange={(e) => setSteps(steps.map((x, j) => (j === i ? { ...x, after: Number(e.target.value) || undefined } : x)))}
+              onChange={(e) => editRows({ type: 'after', id: row.id, after: Number(e.target.value) || undefined })}
             />
-            <button className="icon-btn" title="↑" disabled={i === 0} onClick={() => setSteps(steps.map((x, j) => (j === i - 1 ? steps[i] : j === i ? steps[i - 1] : x)))}>
+            <button className="icon-btn" title="↑" disabled={i === 0} onClick={() => editRows({ type: 'move', id: row.id, offset: -1 })}>
               ↑
             </button>
-            <button className="icon-btn" onClick={() => setSteps(steps.filter((_, j) => j !== i))}>
+            <button className="icon-btn" onClick={() => editRows({ type: 'remove', id: row.id })}>
               <X size={16} />
             </button>
           </div>
-        ))}
-        <button className="btn sm" onClick={() => setSteps([...steps, blank('say')])}>
+          )
+        })}
+        <button className="btn sm" onClick={() => editRows({ type: 'add', step: blank('say') })}>
           <Plus size={14} /> {t('routines.addStep')}
         </button>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 22 }}>

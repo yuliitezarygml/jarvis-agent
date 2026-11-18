@@ -43,6 +43,7 @@ export class SpeechEngine extends EventEmitter {
   private queue: Job[] = []
   private inFlight: Job | null = null
   private produced = false
+  private childFailures = 0
   private seq = 0
   ready = false
 
@@ -59,8 +60,9 @@ export class SpeechEngine extends EventEmitter {
     const miss: string[] = []
     if (!existsSync(p.vad)) miss.push('silero-vad')
     if (!p.wakeDir) miss.push('wake-ru-zipformer')
-    // English recogniser: the chosen one, or any installed alternative
-    const haveEn = existsSync(p.parakeetDir) || existsSync(p.whisperDir(whisperKind(s))) || existsSync(p.whisperDir('base'))
+    // Use the same fallback selection here and when the child is configured.
+    const en = englishRecognizer(p, s)
+    const haveEn = !!(en.parakeetDir || en.whisperDir)
     if (!haveEn) miss.push('parakeet-en')
     return miss
   }
@@ -78,9 +80,16 @@ export class SpeechEngine extends EventEmitter {
     if (this.worker || this.missing().length) return false
     const p = pathsFor(this.base)
     const s = this.getSettings()
-    const w = new Worker(join(__dirname, 'speechWorker.js'))
+    let w: Worker
+    try {
+      w = new Worker(join(__dirname, 'speechWorker.js'))
+    } catch (e) {
+      this.emit('event', { type: 'error', error: String(e) })
+      return false
+    }
     this.worker = w
     w.on('message', (m: any) => {
+      if (this.worker !== w) return
       if (m.type === 'ready') this.ready = true
       if (m.type === 'job') return this.enqueue(m)
       if (m.type === 'mode') this.mode = m.mode
@@ -89,12 +98,22 @@ export class SpeechEngine extends EventEmitter {
       if (m.type === 'wake' || (m.type === 'speech' && m.on && this.mode === 'command')) this.ensureChild()
       this.emit('event', m)
     })
-    w.on('error', (e) => this.emit('event', { type: 'error', error: String(e) }))
-    w.on('exit', () => {
-      this.worker = null
-      this.ready = false
-    })
-    w.postMessage({ type: 'init', vad: p.vad, wakeDir: p.wakeDir, aliases: this.aliases(), wakeEnabled: s.wakeEnabled })
+    const failed = (error: string) => {
+      if (this.worker !== w) return
+      const pending = !!this.inFlight || this.queue.length > 0
+      this.dispose()
+      this.emit('event', { type: 'busy', on: false })
+      if (pending) this.emit('event', { type: 'noResult' })
+      this.emit('event', { type: 'error', error })
+    }
+    w.on('error', (e) => failed(String(e)))
+    w.on('exit', (code) => failed(`speech worker exited (${code})`))
+    try {
+      w.postMessage({ type: 'init', vad: p.vad, wakeDir: p.wakeDir, aliases: this.aliases(), wakeEnabled: s.wakeEnabled })
+    } catch (e) {
+      failed(String(e))
+      return false
+    }
     return true
   }
 
@@ -110,42 +129,62 @@ export class SpeechEngine extends EventEmitter {
     if (this.child) return
     const p = pathsFor(this.base)
     const s = this.getSettings()
-    const c = fork(this.childPath(), [], {
-      execPath: process.execPath,
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-      execArgv: [],
-      serialization: 'advanced',
-      stdio: ['ignore', 'ignore', 'pipe', 'ipc']
-    })
+    let c: ChildProcess
+    try {
+      c = fork(this.childPath(), [], {
+        execPath: process.execPath,
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+        execArgv: [],
+        serialization: 'advanced',
+        stdio: ['ignore', 'ignore', 'pipe', 'ipc']
+      })
+    } catch (e) {
+      this.childFailed(null, String(e))
+      return
+    }
     this.child = c
     this.childReady = false
-    c.stderr?.on('data', (d) => console.warn('[asr]', String(d).trim().slice(0, 300)))
-    c.on('message', (m: any) => this.onChild(m))
-    c.on('exit', () => {
-      if (this.child === c) {
-        this.child = null
-        this.childReady = false
-        if (this.inFlight) {
-          // died mid-job: tell the UI so it never sits on "transcribing"
-          this.inFlight = null
-          this.emit('event', { type: 'busy', on: false })
-          this.emit('event', { type: 'noResult' })
-        }
-        if (this.queue.length) this.ensureChild()
-      }
+    c.stderr?.on('data', (d) => {
+      if (this.child === c) console.warn('[asr]', String(d).trim().slice(0, 300))
     })
-    c.send({
+    c.on('message', (m: any) => {
+      if (this.child === c) this.onChild(m)
+    })
+    c.on('error', (e) => this.childFailed(c, String(e)))
+    c.on('exit', (code, signal) => this.childFailed(c, `ASR process exited (${signal || code})`))
+    this.sendChild(c, {
       type: 'init',
       warm: s.sttLanguage !== 'en',
       cfg: {
-        whisperDir: existsSync(p.whisperDir(whisperKind(s))) ? p.whisperDir(whisperKind(s)) : p.whisperDir('base'),
-        whisperKind: existsSync(p.whisperDir(whisperKind(s))) ? whisperKind(s) : 'base',
-        parakeetDir: s.sttModel === 'parakeet-en' && existsSync(p.parakeetDir) ? p.parakeetDir : '',
+        ...englishRecognizer(p, s),
         gigaDir: existsSync(p.gigaDir) ? p.gigaDir : '',
         threads: 4,
         language: s.sttLanguage === 'auto' ? '' : s.sttLanguage
       }
     })
+  }
+
+  private sendChild(c: ChildProcess, message: object) {
+    try {
+      c.send(message, (error: Error | null) => {
+        if (error) this.childFailed(c, String(error))
+      })
+    } catch (e) {
+      this.childFailed(c, String(e))
+    }
+  }
+
+  private childFailed(c: ChildProcess | null, error: string) {
+    if (this.child !== c) return
+    const pending = !!this.inFlight || this.queue.length > 0
+    // Retry a crashed process once. Persistent startup/crash failures must not spawn an endless process loop.
+    const retry = ++this.childFailures < 2
+    this.killChild(retry)
+    if (!retry) this.queue = []
+    this.emit('event', { type: 'error', error, soft: true })
+    this.emit('event', { type: 'busy', on: false })
+    if (pending && !retry) this.emit('event', { type: 'noResult' })
+    if (this.worker && this.queue.length) this.ensureChild()
   }
 
   private armIdle() {
@@ -156,12 +195,16 @@ export class SpeechEngine extends EventEmitter {
     }, CHILD_IDLE_MS)
   }
 
-  private killChild() {
+  private killChild(retryCurrent = false) {
     if (this.childIdle) clearTimeout(this.childIdle)
     this.childIdle = null
     const c = this.child
     this.child = null
     this.childReady = false
+    // Clear synchronously: the old child's delayed exit must not own the next job's state.
+    if (retryCurrent && this.inFlight && !this.produced) this.queue.unshift(this.inFlight)
+    this.inFlight = null
+    this.produced = false
     try {
       c?.kill()
     } catch {}
@@ -172,6 +215,7 @@ export class SpeechEngine extends EventEmitter {
   }
 
   private enqueue(m: Omit<Job, 'id'>) {
+    if (!this.child && !this.inFlight && !this.queue.length) this.childFailures = 0
     this.queue.push({ ...m, id: ++this.seq })
     this.ensureChild()
     this.pump()
@@ -184,7 +228,7 @@ export class SpeechEngine extends EventEmitter {
     this.inFlight = job
     this.produced = false
     const s = this.getSettings()
-    this.child.send({
+    this.sendChild(this.child, {
       type: 'job',
       id: job.id,
       samples: job.samples,
@@ -202,6 +246,7 @@ export class SpeechEngine extends EventEmitter {
       this.childReady = true
       this.pump()
     } else if (m.type === 'event') {
+      if (m.id !== 0 && m.id !== this.inFlight?.id) return
       if (m.event.type === 'transcript') {
         this.produced = true
         // A command we were waiting for has been consumed: leave command mode BEFORE the consumer sees the transcript,
@@ -215,8 +260,11 @@ export class SpeechEngine extends EventEmitter {
       }
       this.emit('event', m.event)
     } else if (m.type === 'done') {
+      if (!this.inFlight || m.id !== this.inFlight.id) return
       const wasProduced = this.produced
       this.inFlight = null
+      this.produced = false
+      this.childFailures = 0
       this.emit('event', { type: 'busy', on: false })
       if (!wasProduced) this.emit('event', { type: 'noResult' })
       this.armIdle()
@@ -246,7 +294,11 @@ export class SpeechEngine extends EventEmitter {
   updateConfig() {
     const s = this.getSettings()
     this.worker?.postMessage({ type: 'config', aliases: this.aliases(), wakeEnabled: s.wakeEnabled })
-    this.killChild() // language / model choice changed: the next utterance starts a fresh child with the new settings
+    const pending = !!this.inFlight
+    this.killChild(true) // preserve unconsumed audio and decode it with the new configuration
+    this.childFailures = 0
+    if (pending) this.emit('event', { type: 'busy', on: false })
+    if (this.queue.length) this.ensureChild()
   }
 
   restart() {
@@ -256,15 +308,32 @@ export class SpeechEngine extends EventEmitter {
 
   dispose() {
     this.killChild()
-    void this.worker?.terminate()
+    const w = this.worker
     this.worker = null
     this.ready = false
+    this.mode = 'wake'
     this.queue = []
     this.inFlight = null
+    this.childFailures = 0
+    void w?.terminate().catch(() => {})
   }
 }
 
 /** which Whisper size to use when Whisper is the chosen (or fallback) English engine */
 function whisperKind(s: Settings): 'base' | 'small' | 'turbo' {
   return s.sttModel.startsWith('whisper-') ? (s.sttModel.replace('whisper-', '') as 'base' | 'small' | 'turbo') : 'base'
+}
+
+/** Prefer the selected recogniser, then another installed engine rather than a missing base model. */
+function englishRecognizer(p: ReturnType<typeof pathsFor>, s: Settings) {
+  const chosen = whisperKind(s)
+  const kinds = Array.from(new Set([chosen, 'base', 'small', 'turbo'] as const))
+  const kind = kinds.find((k) => existsSync(p.whisperDir(k)))
+  const parakeet = existsSync(p.parakeetDir)
+  const useParakeet = parakeet && (s.sttModel === 'parakeet-en' || !kind)
+  return {
+    whisperDir: !useParakeet && kind ? p.whisperDir(kind) : '',
+    whisperKind: kind || 'base',
+    parakeetDir: useParakeet ? p.parakeetDir : ''
+  }
 }

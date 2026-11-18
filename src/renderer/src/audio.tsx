@@ -1,11 +1,26 @@
 // Hidden "audio host" page: microphone capture → main (speech engine), and TTS playback with the Jarvis polish chain.
 import { api, IPC } from './api'
 import type { Settings } from '@shared/types'
+import { PlaybackController, prepareAudioPlayback } from './audio-playback'
 
 let settings: Settings | null = null
 let micCtx: AudioContext | null = null
 let micStream: MediaStream | null = null
 let currentMic = ''
+let micGeneration = 0
+let micRetry: ReturnType<typeof setTimeout> | null = null
+let disconnectMic: (() => void) | null = null
+let micStatus: { state: 'starting' | 'ready' | 'error'; deviceId: string; error?: string } = { state: 'starting', deviceId: 'default' }
+
+function reportMicStatus(status: typeof micStatus) {
+  micStatus = status
+  api.send(IPC.micStatus, status)
+}
+
+function releaseMic(stream: MediaStream | null, ctx: AudioContext | null) {
+  stream?.getTracks().forEach((track) => track.stop())
+  if (ctx && ctx.state !== 'closed') void ctx.close().catch(() => {})
+}
 
 const WORKLET = `
 class Capture extends AudioWorkletProcessor {
@@ -30,10 +45,14 @@ registerProcessor('capture', Capture)
 
 async function startMic() {
   stopMic()
+  const generation = micGeneration
   const id = settings?.micDeviceId ?? 'default'
   currentMic = id
+  reportMicStatus({ state: 'starting', deviceId: id })
+  let stream: MediaStream | null = null
+  let ctx: AudioContext | null = null
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({
+    stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         deviceId: id === 'default' ? undefined : { exact: id },
         channelCount: 1,
@@ -42,37 +61,70 @@ async function startMic() {
         autoGainControl: true
       }
     })
-    micCtx = new AudioContext({ sampleRate: 16000, latencyHint: 'interactive' })
+    if (generation !== micGeneration) {
+      releaseMic(stream, ctx)
+      return
+    }
+    ctx = new AudioContext({ sampleRate: 16000, latencyHint: 'interactive' })
+    micStream = stream
+    micCtx = ctx
     const url = URL.createObjectURL(new Blob([WORKLET], { type: 'text/javascript' }))
-    await micCtx.audioWorklet.addModule(url)
-    const src = micCtx.createMediaStreamSource(micStream)
-    const node = new AudioWorkletNode(micCtx, 'capture')
+    try {
+      await ctx.audioWorklet.addModule(url)
+    } finally {
+      URL.revokeObjectURL(url)
+    }
+    if (generation !== micGeneration) {
+      releaseMic(stream, ctx)
+      return
+    }
+    const src = ctx.createMediaStreamSource(stream)
+    const node = new AudioWorkletNode(ctx, 'capture')
     node.port.onmessage = (e) => {
+      if (generation !== micGeneration) return
       const { pcm, rms } = e.data as { pcm: Float32Array; rms: number }
       api.send(IPC.audioChunk, pcm.buffer)
       api.send(IPC.micLevel, Math.min(1, rms * 7))
     }
     src.connect(node)
     // keep the graph alive without audible output
-    const mute = micCtx.createGain()
+    const mute = ctx.createGain()
     mute.gain.value = 0
-    node.connect(mute).connect(micCtx.destination)
+    node.connect(mute).connect(ctx.destination)
+    disconnectMic = () => {
+      node.port.onmessage = null
+      src.disconnect()
+      node.disconnect()
+      mute.disconnect()
+    }
+    reportMicStatus({ state: 'ready', deviceId: id })
   } catch (e) {
+    releaseMic(stream, ctx)
+    if (generation !== micGeneration) return
+    micStream = null
+    micCtx = null
     console.error('mic failed', e)
-    setTimeout(startMic, 4000)
+    reportMicStatus({ state: 'error', deviceId: id, error: e instanceof Error ? e.message : String(e) })
+    micRetry = setTimeout(() => {
+      micRetry = null
+      if (generation === micGeneration) void startMic()
+    }, 4000)
   }
 }
 
 function stopMic() {
-  micStream?.getTracks().forEach((t) => t.stop())
-  void micCtx?.close()
+  micGeneration++
+  if (micRetry !== null) clearTimeout(micRetry)
+  micRetry = null
+  disconnectMic?.()
+  disconnectMic = null
+  releaseMic(micStream, micCtx)
   micStream = null
   micCtx = null
 }
 
 // ------------------------------------------------------------------ playback
 let outCtx: AudioContext | null = null
-let current: { src: AudioBufferSourceNode; id: string } | null = null
 let analyser: AnalyserNode | null = null
 let levelTimer: number | null = null
 
@@ -86,11 +138,13 @@ function ensureOut() {
   return outCtx
 }
 
-function jarvisChain(ctx: AudioContext, fx: boolean, volume: number): { input: AudioNode } {
+function jarvisChain(ctx: AudioContext, fx: boolean, volume: number): { input: AudioNode; dispose: () => void } {
   const gain = ctx.createGain()
+  const nodes: AudioNode[] = [gain]
+  const dispose = () => nodes.forEach((node) => node.disconnect())
   gain.gain.value = volume
   gain.connect(analyser!)
-  if (!fx) return { input: gain }
+  if (!fx) return { input: gain, dispose }
   // gentle "digital butler" polish: presence lift, air, short metallic comb, soft limiter
   const hp = ctx.createBiquadFilter()
   hp.type = 'highpass'
@@ -113,12 +167,13 @@ function jarvisChain(ctx: AudioContext, fx: boolean, volume: number): { input: A
   fb.gain.value = 0.22
   const wet = ctx.createGain()
   wet.gain.value = 0.28
+  nodes.push(hp, presence, air, comp, delay, fb, wet)
   hp.connect(presence).connect(air).connect(comp)
   comp.connect(gain)
   comp.connect(delay)
   delay.connect(fb).connect(delay)
   delay.connect(wet).connect(gain)
-  return { input: hp }
+  return { input: hp, dispose }
 }
 
 function startLevels() {
@@ -140,29 +195,22 @@ function stopLevels() {
   api.send(IPC.ttsLevel, 0)
 }
 
-async function play(req: { id: string; wav: Uint8Array; fx: boolean; volume: number }) {
-  const ctx = ensureOut()
-  if (ctx.state === 'suspended') await ctx.resume()
-  try {
-    const ab = req.wav.buffer.slice(req.wav.byteOffset, req.wav.byteOffset + req.wav.byteLength) as ArrayBuffer
-    const buf = await ctx.decodeAudioData(ab)
-    const src = ctx.createBufferSource()
-    src.buffer = buf
-    const chain = jarvisChain(ctx, req.fx, req.volume)
-    src.connect(chain.input)
-    current = { src, id: req.id }
-    src.onended = () => {
-      if (current?.id === req.id) current = null
-      stopLevels()
-      api.send(IPC.ttsEnded, req.id)
-    }
-    startLevels()
-    src.start()
-  } catch (e) {
-    console.error('playback failed', e)
+const playback = new PlaybackController<{ id: string; wav: Uint8Array; fx: boolean; volume: number }>({
+  prepare: (req, signal) => {
+    const ctx = ensureOut()
+    return prepareAudioPlayback(ctx, req.wav, signal, (src) => {
+      const chain = jarvisChain(ctx, req.fx, req.volume)
+      src.connect(chain.input)
+      return chain.dispose
+    })
+  },
+  started: () => startLevels(),
+  ended: (req) => {
+    stopLevels()
     api.send(IPC.ttsEnded, req.id)
-  }
-}
+  },
+  failed: (e) => console.error('playback failed', e)
+})
 
 function earcon(kind = 'wake') {
   if (settings && !settings.wakeSound) return
@@ -189,12 +237,9 @@ async function main() {
     settings = s
     if (changed) void startMic()
   })
-  api.on(IPC.ttsPlay, (req: any) => void play(req))
-  api.on(IPC.ttsStop, () => {
-    try {
-      current?.src.stop()
-    } catch {}
-  })
+  api.on(IPC.ttsPlay, (req: any) => void playback.play(req))
+  api.on(IPC.ttsStop, () => playback.stop())
+  api.on(IPC.micStatusRequest, () => api.send(IPC.micStatus, micStatus))
   api.on('audio:earcon', (k: string) => earcon(k))
   await startMic()
 }

@@ -276,6 +276,44 @@ export interface AppStatus {
   clone?: 'off' | 'starting' | 'ready' | 'error'
 }
 
+export interface MicrophoneStatus {
+  state: 'starting' | 'ready' | 'error' | 'unknown'
+  deviceId: string
+  error?: string
+  at: number
+}
+
+export interface SynthesisDiagnostic {
+  voice: string
+  at: number
+  ms: number
+  ok: boolean
+  error?: string
+}
+
+export interface TtsServerDiagnostic {
+  url: string
+  ok: boolean
+  checkedAt: number
+  ms: number
+  engine?: string
+  model?: string
+  voice?: string
+  languages?: string[]
+  notice?: string
+  error?: string
+}
+
+export interface DiagnosticsSnapshot {
+  microphone: MicrophoneStatus
+  server: TtsServerDiagnostic | null
+  synthesis: SynthesisDiagnostic | null
+  lastError: { source: 'tts' | 'microphone' | 'speech'; message: string; at: number } | null
+  speech: { state: AppStatus['speech']; asrLoaded: boolean; missingModels: string[] }
+  voiceMode: Settings['voiceMode']
+  voiceEnabled: boolean
+}
+
 export const IPC = {
   settingsGet: 'settings:get',
   settingsSet: 'settings:set',
@@ -301,6 +339,11 @@ export const IPC = {
   permissionClose: 'permission:close',
   audioChunk: 'audio:chunk',
   micLevel: 'audio:level',
+  micStatus: 'audio:status',
+  micStatusRequest: 'audio:status-request',
+  diagnosticsGet: 'diagnostics:get',
+  diagnosticsRefresh: 'diagnostics:refresh',
+  diagnosticsChanged: 'diagnostics:changed',
   transcript: 'stt:transcript',
   ttsPlay: 'tts:play',
   ttsStop: 'tts:stop',

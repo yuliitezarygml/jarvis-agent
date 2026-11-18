@@ -290,6 +290,9 @@ namespace JarvisNative
         static int flatSeq;
 
         public static Dictionary<string, object> FlatScan(IntPtr h0, int max, string query)
+            => FlatScan(h0, max, query, false);
+
+        static Dictionary<string, object> FlatScan(IntPtr h0, int max, string query, bool retried)
         {
             var outp = new List<object>();
             if (h0 == IntPtr.Zero) return new Dictionary<string, object> { ["window"] = "", ["cls"] = "", ["elements"] = outp };
@@ -332,10 +335,10 @@ namespace JarvisNative
                     try { foreach (AutomationElement c in withKids.CachedChildren) queue.Enqueue((c, depth + 1)); } catch { }
             }
             // Chromium builds its tree lazily after the first UIA request: wait once and retry
-            if (outp.Count < 8 && cls.StartsWith("Chrome_WidgetWin") && query != "\u0001retry")
+            if (!retried && outp.Count < 8 && cls.StartsWith("Chrome_WidgetWin"))
             {
                 Thread.Sleep(1600);
-                var again = FlatScan(h0, max, string.IsNullOrEmpty(query) ? "\u0001retry" : query);
+                var again = FlatScan(h0, max, query, true);
                 return again;
             }
             string title = "";

@@ -5,6 +5,7 @@ import { EventEmitter } from 'events'
 import type { XttsSidecar } from './xtts'
 import { fishSynth, serverSynth, type FishConfig } from './fish'
 import { resourcePath } from './paths'
+import { diagnosticMessage } from './diagnostics'
 
 /** Piper needs the VC++ runtime; the app ships it in resources/native/vcrt for PCs without the redistributable. */
 function piperEnv() {
@@ -119,6 +120,18 @@ export class Tts extends EventEmitter {
 
   /** Synthesise one sentence → returns audio bytes (wav, or mp3 from the free server). */
   async synth(text: string, voiceId: string, speed = 1, lang: 'ru' | 'en' = 'ru'): Promise<Buffer> {
+    const started = performance.now()
+    try {
+      const audio = await this.synthAudio(text, voiceId, speed, lang)
+      this.emit('synthesis', { voice: voiceId, at: Date.now(), ms: Math.round(performance.now() - started), ok: true })
+      return audio
+    } catch (error) {
+      this.emit('synthesis', { voice: voiceId, at: Date.now(), ms: Math.round(performance.now() - started), ok: false, error: diagnosticMessage(error, [text, this.fish?.().apiKey || '']) })
+      throw error
+    }
+  }
+
+  private async synthAudio(text: string, voiceId: string, speed: number, lang: 'ru' | 'en'): Promise<Buffer> {
     if (voiceId.startsWith('fish:')) {
       const f = this.fish!()
       const l = voiceId === 'fish:en' ? 'en' : 'ru'

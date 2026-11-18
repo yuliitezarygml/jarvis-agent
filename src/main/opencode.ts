@@ -580,8 +580,10 @@ export class Opencode extends EventEmitter {
     this.emit('status', s, message)
   }
 
-  async send(text: string, system: string, via: 'voice' | 'text') {
+  async send(text: string, system: string, via: 'voice' | 'text', signal?: AbortSignal) {
+    signal?.throwIfAborted()
     await this.wake()
+    signal?.throwIfAborted()
     if (this.status !== 'ready') throw new Error('Agent is not ready: ' + this.status)
     this.armSleep()
     this.currentVia = via
@@ -593,6 +595,7 @@ export class Opencode extends EventEmitter {
     this.lastEventAt = Date.now()
     this.setBusy(true)
     this.emit('turnStart', via)
+    signal?.throwIfAborted()
     await this.req('POST', `/session/${this.sessionId}/prompt_async`, {
       agent: 'jarvis',
       model: { providerID, modelID: rest.join('/') },

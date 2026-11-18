@@ -1,13 +1,14 @@
 import { app, BrowserWindow, globalShortcut, ipcMain, Menu, nativeImage, screen, session, shell, Tray, desktopCapturer, net } from 'electron'
 import { join } from 'path'
 import { existsSync, writeFileSync } from 'fs'
-import { IPC, DEFAULT_SETTINGS, type Settings, type SetupProgress } from '../shared/types'
+import { IPC, DEFAULT_SETTINGS, type Settings, type SetupProgress, type MicrophoneStatus, type SynthesisDiagnostic } from '../shared/types'
 import { Assistant } from './assistant'
 import { dataDir } from './store'
 import { listAssets, installAsset } from './models'
 import { rendererUrl, preloadPath, resourcePath } from './paths'
 import { initLogging, logDir } from './log'
 import { Updater } from './updater'
+import { Diagnostics, diagnosticServerUrl, probeTtsServer } from './diagnostics'
 
 // promo capture / tests: run with a throw-away profile so the real data is never touched
 if (process.env.JARVIS_USERDATA) app.setPath('userData', process.env.JARVIS_USERDATA)
@@ -64,6 +65,32 @@ let quitting = false
 const all = () => [mainWin, hudWin, updateWin].filter((w): w is BrowserWindow => !!w && !w.isDestroyed())
 const broadcast = (ch: string, ...args: unknown[]) => all().forEach((w) => w.webContents.send(ch, ...args))
 const toUi = (ch: string, ...args: unknown[]) => [mainWin, hudWin].forEach((w) => w && !w.isDestroyed() && w.webContents.send(ch, ...args))
+
+const diagnostics = new Diagnostics(() => broadcast(IPC.diagnosticsChanged, diagnosticSnapshot()))
+function diagnosticSnapshot() {
+  const settings = assistant.settings()
+  const snapshot = diagnostics.snapshot({
+    speech: { state: assistant.status().speech, asrLoaded: assistant.speech.asrLoaded, missingModels: assistant.speech.missing() },
+    voiceMode: settings.voiceMode,
+    voiceEnabled: settings.voiceEnabled
+  })
+  if (snapshot.server?.url !== diagnosticServerUrl(settings.ttsServerUrl || DEFAULT_SETTINGS.ttsServerUrl)) snapshot.server = null
+  return snapshot
+}
+
+let serverProbe: { url: string; pending: ReturnType<typeof probeTtsServer> } | null = null
+function checkTtsServer() {
+  const url = assistant.settings().ttsServerUrl.trim() || DEFAULT_SETTINGS.ttsServerUrl
+  if (serverProbe?.url === url) return serverProbe.pending
+  const pending = probeTtsServer(url, (input, init) => net.fetch(input, init)).then((result) => {
+    if ((assistant.settings().ttsServerUrl.trim() || DEFAULT_SETTINGS.ttsServerUrl) === url) diagnostics.recordServer(result)
+    return result
+  }).finally(() => {
+    if (serverProbe?.pending === pending) serverProbe = null
+  })
+  serverProbe = { url, pending }
+  return pending
+}
 
 function iconImage() {
   const p = resourcePath('icon.png')
@@ -276,6 +303,12 @@ function wireIpc() {
   ipcMain.handle(IPC.settingsGet, () => assistant.settings())
   ipcMain.handle(IPC.settingsSet, (_e, patch: Partial<Settings>) => applySettings(patch))
   ipcMain.handle('status:get', () => assistant.status())
+  ipcMain.handle(IPC.diagnosticsGet, () => diagnosticSnapshot())
+  ipcMain.handle(IPC.diagnosticsRefresh, async () => {
+    hudWin?.webContents.send(IPC.micStatusRequest)
+    await checkTtsServer()
+    return diagnosticSnapshot()
+  })
   ipcMain.handle(IPC.chatHistory, () => assistant.opencode.history())
   ipcMain.handle(IPC.sendText, (_e, text: string) => assistant.handleCommand(text, 'text'))
   ipcMain.handle(IPC.abort, () => assistant.abortTask())
@@ -331,13 +364,8 @@ function wireIpc() {
     return assistant.opencode.mcpStatus()
   })
   ipcMain.handle('voice:serverHealth', async () => {
-    try {
-      const base = (assistant.settings().ttsServerUrl || DEFAULT_SETTINGS.ttsServerUrl).replace(/\/+$/, '')
-      const r = await net.fetch(base + '/api/health', { signal: AbortSignal.timeout(8000) })
-      return await r.json()
-    } catch (e: any) {
-      return { ok: false, notice: '' }
-    }
+    const result = await checkTtsServer()
+    return { ...result, notice: result.error || result.notice || '' }
   })
   ipcMain.handle('providers:list', async () => {
     await assistant.opencode.wake()
@@ -412,6 +440,10 @@ function wireIpc() {
   // audio host → speech engine
   ipcMain.on(IPC.audioChunk, (_e, buf: ArrayBuffer) => assistant.speech.feed(buf))
   ipcMain.on(IPC.micLevel, (_e, level: number) => toUi(IPC.micLevel, level))
+  ipcMain.on(IPC.micStatus, (_e, status: Omit<MicrophoneStatus, 'at'>) => {
+    if (!status || !['starting', 'ready', 'error'].includes(status.state) || typeof status.deviceId !== 'string') return
+    diagnostics.recordMicrophone({ state: status.state, deviceId: status.deviceId, error: typeof status.error === 'string' ? status.error : undefined })
+  })
   ipcMain.on(IPC.ttsLevel, (_e, level: number) => toUi(IPC.ttsLevel, level))
   ipcMain.on(IPC.ttsEnded, (_e, id: string) => assistant.onPlayEnded(id))
 }
@@ -455,6 +487,10 @@ async function autoInstall() {
 
 function wireAssistantEvents() {
   assistant.on('status', (s) => broadcast(IPC.status, s))
+  assistant.tts.on('synthesis', (result: SynthesisDiagnostic) => diagnostics.recordSynthesis(result))
+  assistant.speech.on('event', (event) => {
+    if (event.type === 'error') diagnostics.recordError('speech', event.error)
+  })
   assistant.on('chat', (item) => toUi(IPC.chat, item))
   assistant.on('permission', (r) => {
     pendingPerms.add(r.id)

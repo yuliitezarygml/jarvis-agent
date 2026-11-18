@@ -18,6 +18,7 @@ import { XttsSidecar } from './xtts'
 import { buildSystemExtra } from './agent-prompt'
 import { matchFast } from './fast-commands'
 import { pathsFor } from './models'
+import { RoutineCancellation, RoutineCancelledError, RoutineRunner } from './routine-cancel'
 
 let idSeq = 0
 const uid = () => `x${Date.now().toString(36)}${(idSeq++).toString(36)}`
@@ -91,6 +92,8 @@ export class Assistant extends EventEmitter implements Hub {
   private askQueue: Promise<string> = Promise.resolve('')
   private askQuestion = ''
   private ackPreparing = false
+  private routineRunner = new RoutineRunner()
+  private agentAbort: Promise<void> | null = null
 
   constructor() {
     super()
@@ -464,20 +467,24 @@ export class Assistant extends EventEmitter implements Hub {
   }
 
   /** Entry point for anything the user says or types. */
-  async handleCommand(text: string, via: 'voice' | 'text', lang = '') {
+  async handleCommand(text: string, via: 'voice' | 'text', lang = '', routine?: RoutineCancellation) {
+    if (routine) routine.check()
+    else this.routineRunner.cancel()
     this.lastWasVoice = via === 'voice'
     this.lastLang = lang === 'ru' || /[а-яё]/i.test(text) ? 'ru' : 'en'
     if (this.speakingDepth > 0) this.stopSpeaking()
-    if (this.opencode.isBusy) {
+    if (this.opencode.isBusy || this.agentAbort) {
       this.mcp.computer.cancel() // a new request supersedes the running one: drop any queued clicks/keys
-      await this.opencode.abort()
+      await this.abortAgent()
+      routine?.check()
     }
     this.emit('chat', { id: uid(), kind: 'user', text, at: Date.now(), via } satisfies ChatItem)
 
     const quick = text.toLowerCase().replace(/[^\p{L}\s]/gu, '').trim()
     if (/^(стоп|отмена|отмени|хватит|замолчи|stop|cancel|abort|enough|never ?mind)$/.test(quick)) {
+      this.routineRunner.cancel()
       this.mcp.computer.cancel()
-      await this.opencode.abort()
+      await this.abortAgent()
       this.stopSpeaking()
       this.setState('idle')
       return
@@ -485,6 +492,7 @@ export class Assistant extends EventEmitter implements Hub {
 
     if (/^(новый (диалог|чат|разговор)|начни (с начала|заново|сначала)|забудь (разговор|диалог|всё что было)|new (chat|conversation|thread)|start (over|fresh)|forget (this|the) (chat|conversation))$/.test(quick)) {
       await this.opencode.newThread()
+      routine?.check()
       this.emit('chat', { id: uid(), kind: 'system', text: '✦ New conversation', at: Date.now() } satisfies ChatItem)
       void this.say(/[а-яё]/.test(quick) ? 'Начинаем с чистого листа, сэр.' : 'A clean slate, sir.')
       return
@@ -497,6 +505,7 @@ export class Assistant extends EventEmitter implements Hub {
         if (fast.kind === 'volume') await this.win.call('volume', { action: fast.action, level: fast.level, step: fast.step })
         else if (fast.kind === 'media') await this.win.call('keys', { keys: { play_pause: 'playpause', next: 'nexttrack', previous: 'prevtrack' }[fast.action] })
         else await this.win.call('desktop', { action: fast.action })
+        routine?.check()
         this.emit('chat', { id: uid(), kind: 'system', text: '⚡ ' + fast.say[this.lastLang === 'ru' ? 0 : 1], at: Date.now() } satisfies ChatItem)
         if (via === 'voice' && fast.kind !== 'media') void this.say(fast.say[this.lastLang === 'ru' ? 0 : 1])
         return
@@ -506,8 +515,9 @@ export class Assistant extends EventEmitter implements Hub {
     }
 
     await this.autoThread()
+    routine?.check()
 
-    const r = this.matchRoutine(text)
+    const r = routine ? null : this.matchRoutine(text)
     if (r) {
       this.emit('chat', { id: uid(), kind: 'system', text: `▶ ${r.name}`, at: Date.now() } satisfies ChatItem)
       this.setState('thinking')
@@ -538,8 +548,9 @@ export class Assistant extends EventEmitter implements Hub {
       this.lastVia = via
       this.lastUserText = text
       this.freeSwitches = 0
-      await this.opencode.send(text, system, via)
+      await this.opencode.send(text, system, via, routine?.signal)
     } catch (e: any) {
+      routine?.check()
       this.emit('chat', { id: uid(), kind: 'system', text: `⚠ ${e?.message || e}`, at: Date.now() } satisfies ChatItem)
       this.setState('idle')
     }
@@ -752,11 +763,22 @@ export class Assistant extends EventEmitter implements Hub {
 
   /** Stop button / abort IPC: cancel the agent turn and any in-flight computer actions. */
   async abortTask() {
+    this.routineRunner.cancel()
     this.mcp.computer.cancel()
-    await this.opencode.abort()
     this.stopSpeaking()
     this.setControl(false)
     this.setState('idle')
+    await this.abortAgent()
+  }
+
+  private abortAgent(): Promise<void> {
+    if (this.agentAbort) return this.agentAbort
+    const pending = this.opencode.abort()
+    this.agentAbort = pending
+    void pending.finally(() => {
+      if (this.agentAbort === pending) this.agentAbort = null
+    }).catch(() => {})
+    return pending
   }
 
   stopSpeaking() {
@@ -907,10 +929,11 @@ export class Assistant extends EventEmitter implements Hub {
 
   /** Emergency stop (global hotkey): cancel the task, silence, drop permissions, kill the glow. */
   emergencyStop() {
+    this.routineRunner.cancel()
     this.mcp.computer.cancel()
     this.grantedThreads.clear()
     this.controlPrompt = null
-    void this.opencode.abort()
+    void this.abortAgent()
     this.stopSpeaking()
     this.setControl(false)
     this.setState('idle')
@@ -1039,8 +1062,9 @@ export class Assistant extends EventEmitter implements Hub {
     const waiting = this.askResolve || this.pendingConfirms.size > 0 || this.controlPrompt
     if (!this.opencode?.isBusy || waiting || this.speakingDepth > 0) return
     if (Date.now() - this.opencode.lastEventAt > 150_000) {
+      this.routineRunner.cancel()
       this.mcp.computer.cancel()
-      void this.opencode.abort()
+      void this.abortAgent()
       this.setControl(false)
       this.emit('chat', { id: uid(), kind: 'system', text: this.lastLang === 'ru' ? '⚠ Задача зависла — остановил' : '⚠ Task stalled — stopped', at: Date.now() } satisfies ChatItem)
       this.setState('idle')
@@ -1049,62 +1073,53 @@ export class Assistant extends EventEmitter implements Hub {
 
   // ---------------------------------------------------------------- routines
   async runRoutine(r: Routine): Promise<string> {
-    const log: string[] = []
-    for (const step of r.steps) {
-      try {
-        log.push(await this.runStep(step))
-      } catch (e: any) {
-        log.push(`step ${step.type} failed: ${e?.message || e}`)
-      }
-    }
-    return log.join('\n')
+    if (this.routineRunner.active) this.stopSpeaking()
+    return this.routineRunner.run(r.steps, (step, run) => this.runStepInner(step, run), (step) => {
+      this.emit('diagnosticError', { source: 'routine', message: `Routine step failed (${step.type})` })
+    })
   }
 
-  private async runStep(step: RoutineStep): Promise<string> {
-    const r = await this.runStepInner(step)
-    if (step.after) await new Promise((res) => setTimeout(res, Math.min(step.after!, 60000)))
-    return r
-  }
-
-  private async runStepInner(step: RoutineStep): Promise<string> {
-    const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms))
+  private async runStepInner(step: RoutineStep, run: RoutineCancellation): Promise<string> {
+    run.check()
+    const sleep = (ms: number) => run.wait(ms)
+    const call = (cmd: string, args: Record<string, unknown>) => run.perform(() => this.win.call(cmd, args))
     switch (step.type) {
       case 'focus':
-        await this.win.call('focus', { title: step.target })
+        await call('focus', { title: step.target })
         return 'focused ' + step.target
       case 'click': {
         let x = step.x ?? 0
         let y = step.y ?? 0
         if (step.text) {
           const c = this.mcp.computer
-          let hit = c.find(step.text, await c.scan({}), true).filter((m) => m.score >= 0.7)[0]
+          let hit = c.find(step.text, await run.perform(() => c.scan({})), true).filter((m) => m.score >= 0.7)[0]
           if (!hit) {
             await sleep(600)
-            hit = c.find(step.text, await c.scan({}), true).filter((m) => m.score >= 0.7)[0]
+            hit = c.find(step.text, await run.perform(() => c.scan({})), true).filter((m) => m.score >= 0.7)[0]
           }
           if (!hit) throw new Error(`"${step.text}" is not on screen`)
           x = Math.round(hit.rect.x + hit.rect.w / 2)
           y = Math.round(hit.rect.y + hit.rect.h / 2)
         }
-        await this.win.call('click', { x, y, button: step.button ?? 'left', count: step.count ?? 1 })
+        await call('click', { x, y, button: step.button ?? 'left', count: step.count ?? 1 })
         return `clicked ${x},${y}`
       }
       case 'move':
-        await this.win.call('move', { x: step.x, y: step.y })
+        await call('move', { x: step.x, y: step.y })
         return 'moved'
       case 'scroll': {
         const n = Math.max(1, Math.min(60, step.amount))
-        await this.win.call('scroll', { ...(step.x !== undefined ? { x: step.x, y: step.y } : {}), dy: step.direction === 'down' ? n : step.direction === 'up' ? -n : 0, dx: step.direction === 'right' ? n : step.direction === 'left' ? -n : 0 })
+        await call('scroll', { ...(step.x !== undefined ? { x: step.x, y: step.y } : {}), dy: step.direction === 'down' ? n : step.direction === 'up' ? -n : 0, dx: step.direction === 'right' ? n : step.direction === 'left' ? -n : 0 })
         return 'scrolled'
       }
       case 'hold': {
-        await this.win.call('keydown', { keys: step.keys, scan: !!step.scan })
         try {
+          await call('keydown', { keys: step.keys, scan: !!step.scan })
           const t0 = Date.now()
           await sleep(Math.min(400, step.ms))
           // auto-repeat like a held physical key
           while (Date.now() - t0 < Math.min(step.ms, 20000)) {
-            await this.win.call('keydown', { keys: step.keys, scan: !!step.scan })
+            await call('keydown', { keys: step.keys, scan: !!step.scan })
             await sleep(35)
           }
         } finally {
@@ -1114,53 +1129,93 @@ export class Assistant extends EventEmitter implements Hub {
       }
       case 'say':
         await this.say(step.text)
+        run.check()
         return 'said'
       case 'open':
-        await this.powershell(`Start-Process ${psQuote(step.target)}`)
+        await this.powershell(`Start-Process ${psQuote(step.target)}`, 60000, run.signal)
         return 'opened ' + step.target
       case 'run':
-        return (await this.powershell(step.command)).slice(0, 400) || 'ran'
+        return (await this.powershell(step.command, 60000, run.signal)).slice(0, 400) || 'ran'
       case 'keys':
-        await this.win.call('keys', { keys: step.keys, scan: !!step.scan })
+        await call('keys', { keys: step.keys, scan: !!step.scan })
         return 'keys'
       case 'type':
-        await this.win.call('type', { text: step.text, char_delay: step.charDelay ?? 4 })
+        await call('type', { text: step.text, char_delay: step.charDelay ?? 4 })
         return 'typed'
       case 'wait':
-        await new Promise((r) => setTimeout(r, Math.min(step.ms, 60000)))
+        await sleep(Math.min(step.ms, 60000))
         return 'waited'
       case 'agent':
-        await this.runAgentTask(step.prompt)
+        await this.runAgentTask(step.prompt, run)
         return 'agent task done'
     }
   }
 
-  private runAgentTask(prompt: string) {
-    return new Promise<void>((resolve) => {
+  private runAgentTask(prompt: string, run: RoutineCancellation) {
+    run.check()
+    return new Promise<void>((resolve, reject) => {
+      let started = false
+      const cleanup = () => {
+        this.opencode.off('turnStart', start)
+        this.opencode.off('turnEnd', ended)
+        run.signal.removeEventListener('abort', abort)
+      }
       const done = () => {
-        this.opencode.off('turnEnd', done)
+        cleanup()
         resolve()
       }
-      this.opencode.on('turnEnd', done)
-      void this.handleCommand(prompt, 'text').catch(done)
+      const start = () => { started = true }
+      const ended = () => { if (started && !run.signal.aborted) done() }
+      const abort = () => {
+        cleanup()
+        void this.abortAgent().catch(() => {}).finally(() => reject(new RoutineCancelledError()))
+      }
+      this.opencode.on('turnStart', start)
+      this.opencode.on('turnEnd', ended)
+      run.signal.addEventListener('abort', abort, { once: true })
+      void this.handleCommand(prompt, 'text', '', run).then(() => {
+        if (!this.opencode.isBusy && !run.signal.aborted) done()
+      }, (error) => {
+        cleanup()
+        reject(error)
+      })
     })
   }
 
-  powershell(cmd: string, timeout = 60000): Promise<string> {
+  powershell(cmd: string, timeout = 60000, signal?: AbortSignal): Promise<string> {
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) return reject(new RoutineCancelledError())
       const p = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', cmd], { windowsHide: true })
       let out = ''
       p.stdout.on('data', (d) => (out += d))
       p.stderr.on('data', (d) => (out += d))
+      const cleanup = () => {
+        clearTimeout(t)
+        signal?.removeEventListener('abort', abort)
+      }
+      const abort = () => {
+        try {
+          p.kill()
+        } catch {
+          cleanup()
+          reject(new RoutineCancelledError())
+        }
+      }
       const t = setTimeout(() => {
         p.kill()
+        cleanup()
         reject(new Error('timeout'))
       }, timeout)
       p.on('close', () => {
-        clearTimeout(t)
-        resolve(out.trim())
+        cleanup()
+        if (signal?.aborted) reject(new RoutineCancelledError())
+        else resolve(out.trim())
       })
-      p.on('error', reject)
+      p.on('error', (error) => {
+        cleanup()
+        reject(signal?.aborted ? new RoutineCancelledError() : error)
+      })
+      signal?.addEventListener('abort', abort, { once: true })
     })
   }
 
@@ -1179,6 +1234,8 @@ export class Assistant extends EventEmitter implements Hub {
   }
 
   async dispose() {
+    this.routineRunner.cancel()
+    await this.routineRunner.settled()
     this.speech.dispose()
     this.tts.dispose()
     this.xtts.stop()
