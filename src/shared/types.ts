@@ -91,7 +91,7 @@ export const DEFAULT_SETTINGS: Settings = {
   visionModel: 'auto',
   cloneOffered: false,
   voiceMode: 'server',
-  ttsServerUrl: 'https://jarvis-tts-jade.vercel.app',
+  ttsServerUrl: 'http://192.168.50.38:8080',
   installId: '',
   voiceModeSet: false,
   fishApiKey: '',

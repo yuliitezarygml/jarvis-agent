@@ -468,7 +468,7 @@ export function SettingsPage() {
                     <summary>{t('voice.advanced')}</summary>
                     <Group>
                       <Row label={t('voice.serverUrl')}>
-                        <input className="input" defaultValue={s.ttsServerUrl} onBlur={(e) => patch({ ttsServerUrl: e.target.value.trim() || 'https://jarvis-tts-jade.vercel.app' })} />
+                        <input className="input" defaultValue={s.ttsServerUrl} onBlur={(e) => patch({ ttsServerUrl: e.target.value.trim() || 'http://192.168.50.38:8080' })} />
                       </Row>
                     </Group>
                   </details>
