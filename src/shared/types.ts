@@ -91,7 +91,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hudCorner: 'br',
   cwd: '',
   followupSeconds: 7,
-  commandPauseSeconds: 3.5,
+  commandPauseSeconds: 1.5,
   conversationIdleSeconds: 120,
   autoNewThreadMinutes: 45,
   agentIdleMinutes: 10,

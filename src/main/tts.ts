@@ -161,11 +161,12 @@ export class Tts extends EventEmitter {
 export function splitSentences(text: string): string[] {
   const clean = text.replace(/\s+/g, ' ').trim()
   if (!clean) return []
-  const parts = clean.match(/[^.!?…]+[.!?…]*\s*/g) || [clean]
+  // A decimal point is not an utterance boundary: preserve values such as 3.14.
+  const parts = clean.split(/(?<=[.!?…])\s+/u)
   const out: string[] = []
   let cur = ''
   for (const p of parts) {
-    cur += p
+    cur += (cur ? ' ' : '') + p
     if (cur.length >= 24) {
       out.push(cur.trim())
       cur = ''

@@ -67,7 +67,7 @@ export class CommandBuffer {
     this.hearing = on
     if (!on) this.quietAt = this.time.now()
     if (this.active) {
-      this.options.draft(this.text, !on)
+      this.options.draft(this.text, !on && this.waitingForContinuation())
       this.arm()
     }
   }
@@ -112,7 +112,7 @@ export class CommandBuffer {
       this.finishRequested = false
     }
     if (this.text.length > 8000) return this.expire('limit')
-    this.options.draft(this.text, !this.hearing)
+    this.options.draft(this.text, !this.hearing && this.waitingForContinuation())
     this.arm()
   }
 
@@ -127,15 +127,19 @@ export class CommandBuffer {
     this.jobs = 0
   }
 
+  private waitingForContinuation() {
+    const shortAnswer = this.options.answerMode?.() && /^(да|нет|yes|no|da|nu)$/.test(words(this.text))
+    return this.holding || (!shortAnswer && needsContinuation(this.text))
+  }
+
   private arm() {
     this.stopTimer?.()
     this.stopTimer = undefined
     const revision = ++this.revision
     if (!this.transcript || this.hearing || this.jobs) return
-    const shortAnswer = this.options.answerMode?.() && /^(да|нет|yes|no|da|nu)$/.test(words(this.text))
-    const incomplete = this.holding || (!shortAnswer && needsContinuation(this.text))
+    const incomplete = this.waitingForContinuation()
     const configured = this.options.pauseMs()
-    const pause = Number.isFinite(configured) ? Math.min(10_000, Math.max(1000, configured)) : 3500
+    const pause = Number.isFinite(configured) ? Math.min(10_000, Math.max(1000, configured)) : 1500
     const delay = this.finishRequested && !incomplete ? 0 : incomplete ? 20_000 : pause
     const due = Math.max(this.startedAt, this.quietAt) + delay
     this.stopTimer = this.time.after(Math.max(0, due - this.time.now()), () => {

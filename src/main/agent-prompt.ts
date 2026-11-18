@@ -67,6 +67,7 @@ export function buildSystemExtra(opts: {
     `## Context`,
     `Now: ${opts.time}. Input by ${opts.via === 'voice' ? 'VOICE (answer aloud with jarvis_say)' : 'text'}. Language: ${opts.lang}. Screens: ${opts.screen}. Current model ${opts.vision ? 'CAN' : 'CANNOT'} view images.`,
     opts.lang === 'Romanian' ? 'Write and speak natural Romanian with correct diacritics (ă, â, î, ș, ț), including words, titles and questions. Use comma-below ș/ț, never legacy cedillas ş/ţ. Do not transliterate Romanian into ASCII.' : '',
+    opts.lang === 'Russian' ? 'Write replies and jarvis_say speech in natural Russian. Latin product names, numeric results and quoted foreign text do not change the response language. For speech, explain their meaning concisely in Russian; keep exact identifiers in the written reply.' : '',
     `## Known facts about the user\n${opts.memory || '(nothing stored yet)'}`,
     `## Saved routines\n${routines}`,
     opts.conversation ? '## Live conversation\nThe user enabled ongoing voice conversation. Keep replies concise and natural, preserve the topic across follow-ups, and leave room for the user to speak. Distinguish discussion or hypothetical examples from instructions to operate the PC. Only operate on an actual request; use the normal result checks and permissions. Never resume a task the user interrupted unless the new request asks for it.' : '',

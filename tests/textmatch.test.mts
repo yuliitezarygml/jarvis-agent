@@ -46,3 +46,10 @@ test('sentence splitting keeps short fragments together', () => {
   assert.equal(detectLang('Открой браузер'), 'ru')
   assert.equal(detectLang('Open the browser'), 'en')
 })
+
+test('speech sentence boundaries preserve decimal values and Latin product names', () => {
+  const text = 'Версия Windows составляет 3.14. CPU работает нормально. 25.'
+  const sentences = splitSentences(text)
+  assert.equal(sentences.join(' '), text)
+  assert.ok(sentences.some((line) => line.includes('3.14')))
+})

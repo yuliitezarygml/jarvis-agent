@@ -75,7 +75,7 @@ test('voice mode activation never queues a competing wake acknowledgement', asyn
   assert.equal(acknowledgements, 0)
 })
 
-test('Romanian request changes and remembers interaction language, and uses a Romanian local reply', async (t) => {
+test('Russian build keeps Russian replies despite an old foreign language hint', async (t) => {
   const { a, speech } = fixture(t)
   let saved: any = { ...DEFAULT_SETTINGS, lastInputLanguage: 'ru' }
   a.settings = () => saved
@@ -83,10 +83,10 @@ test('Romanian request changes and remembers interaction language, and uses a Ro
   const said: string[] = []
   a.say = async (text: string) => { said.push(text) }
   await a.handleCommand('Hai să vorbim, Jarvis', 'voice', 'ro')
-  assert.equal(a.lastLang, 'ro')
-  assert.equal(saved.lastInputLanguage, 'ro')
+  assert.equal(a.lastLang, 'ru')
+  assert.equal(saved.lastInputLanguage, 'ru')
   assert.equal(speech.conversation, true)
-  assert.match(said[0], /Vă ascult/)
+  assert.match(said[0], /Я слушаю/)
   await a.handleCommand('Jarvis, încheie conversația', 'voice', 'ro')
   assert.equal(speech.conversation, false)
 })

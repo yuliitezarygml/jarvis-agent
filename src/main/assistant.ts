@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'crypto'
 import { spawn } from 'child_process'
 import { DEFAULT_SETTINGS } from '../shared/types'
 import type { AppStatus, AssistantState, ChatItem, HighlightTarget, Lang, PermissionRequest, Routine, RoutineStep, ToolEvent } from '../shared/types'
-import { detectLanguage, interfaceLanguage, isLang, languageName, romanianDiacritics } from '../shared/language'
+import { isLang, languageName, romanianDiacritics } from '../shared/language'
 import { phraseScore, normalize, hasSpokenCorrection } from '../shared/textmatch'
 import { SettingsStore, MemoryStore, RoutineStore, ThreadStore, dataDir } from './store'
 import { Opencode } from './opencode'
@@ -105,7 +105,6 @@ export class Assistant extends EventEmitter implements Hub {
 
   constructor() {
     super()
-    this.lastLang = interfaceLanguage('auto', this.settings().lastInputLanguage, app.getLocale())
     const base = dataDir()
     this.speech = new SpeechEngine(base, () => this.settings())
     this.tts = new Tts(
@@ -283,7 +282,8 @@ export class Assistant extends EventEmitter implements Hub {
   }
 
   private rememberLanguage(text: string, hint = '') {
-    this.lastLang = isLang(hint) ? hint : detectLanguage(text, this.lastLang)
+    // This installation currently uses only Russian, including Latin product names.
+    this.lastLang = 'ru'
     if (this.settings().lastInputLanguage !== this.lastLang) this.settingsStore.set({ lastInputLanguage: this.lastLang })
     this.emitStatus()
   }

@@ -68,6 +68,22 @@ test('a 3-second thinking pause preserves the beginning and a spoken correction'
   assert.equal(f.completed[0].viaWake, true)
 })
 
+test('a complete Russian question waits the configured pause without requesting a continuation', () => {
+  const f = bufferFixture()
+  f.buffer.accept(transcript('Какие у меня планы на сегодня'))
+  assert.equal(f.drafts.at(-1)?.waiting, false)
+  f.clock.tick(3499)
+  assert.equal(f.completed.length, 0)
+  f.clock.tick(1)
+  assert.equal(f.completed[0].text, 'Какие у меня планы на сегодня')
+  f.buffer.accept(transcript('открой'))
+  assert.equal(f.drafts.at(-1)?.waiting, true)
+  f.buffer.speech(true)
+  assert.equal(f.drafts.at(-1)?.waiting, false)
+  f.buffer.speech(false)
+  assert.equal(f.drafts.at(-1)?.waiting, true)
+})
+
 test('new speech cancels the previous completion timer even before ASR returns', () => {
   const f = bufferFixture()
   f.buffer.accept(transcript('открой браузер'))
