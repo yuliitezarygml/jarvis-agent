@@ -5,6 +5,8 @@ import { EventEmitter } from 'events'
 import type { XttsSidecar } from './xtts'
 import { fishSynth, serverSynth, type FishConfig } from './fish'
 import { resourcePath } from './paths'
+import type { Lang } from '../shared/types'
+import { detectLanguage, romanianDiacritics } from '../shared/language'
 
 /** Piper needs the VC++ runtime; the app ships it in resources/native/vcrt for PCs without the redistributable. */
 function piperEnv() {
@@ -87,7 +89,7 @@ class PiperVoice {
 export interface SpeakRequest {
   id: string
   text: string
-  lang: 'ru' | 'en'
+  lang: Lang
   voice: string
   speed: number
 }
@@ -118,13 +120,18 @@ export class Tts extends EventEmitter {
   }
 
   /** Synthesise one sentence → returns audio bytes (wav, or mp3 from the free server). */
-  async synth(text: string, voiceId: string, speed = 1, lang: 'ru' | 'en' = 'ru'): Promise<Buffer> {
+  async synth(text: string, voiceId: string, speed = 1, lang: Lang = 'ru'): Promise<Buffer> {
+    if (lang === 'ro') {
+      text = romanianDiacritics(text)
+      // The shared Fish server and the custom RU/EN clone do not promise Romanian support.
+      if (voiceId.startsWith('fish:') || voiceId.startsWith('xtts:')) voiceId = 'ro_RO-mihai-medium'
+    }
     if (voiceId.startsWith('fish:')) {
       const f = this.fish!()
       const l = voiceId === 'fish:en' ? 'en' : 'ru'
       return f.mode === 'server' ? serverSynth(f, text, l, speed) : fishSynth(f, text, l, speed)
     }
-    if (voiceId.startsWith('xtts:')) return this.xtts!.synth(text, lang, speed)
+    if (voiceId.startsWith('xtts:')) return this.xtts!.synth(text, lang === 'ru' ? 'ru' : 'en', speed)
     let v = this.voices.get(voiceId)
     if (!v) {
       v = new PiperVoice(this.paths.piperExe, this.paths.voice(voiceId), this.tmpRoot, voiceId)
@@ -184,8 +191,4 @@ export function speakable(text: string): string {
     .trim()
 }
 
-export function detectLang(text: string): 'ru' | 'en' {
-  const cyr = (text.match(/[а-яё]/gi) || []).length
-  const lat = (text.match(/[a-z]/gi) || []).length
-  return cyr >= lat ? 'ru' : 'en'
-}
+export const detectLang = detectLanguage

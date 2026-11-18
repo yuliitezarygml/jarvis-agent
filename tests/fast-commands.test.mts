@@ -22,3 +22,8 @@ test('does not hijack real requests', () => {
   assert.equal(matchFast('open the volume mixer and show me the apps'), null)
   assert.equal(matchFast('назад к предыдущему письму в почте'), null)
 })
+test('spoken corrections are interpreted by the agent instead of using the first number', () => {
+  for (const text of ['громкость 40, нет, 20', 'volume to 40, actually 20', 'установи громкость 50, точнее 15']) {
+    assert.equal(matchFast(text), null, text)
+  }
+})

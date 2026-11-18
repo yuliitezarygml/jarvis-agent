@@ -396,7 +396,8 @@ export function AssistantPage() {
       <div className={'assistant-page' + (narrow ? ' narrow' : '')} ref={pageRef}>
         <div className="glass stage">
           <Orb state={status.state} size={narrow ? 104 : 340} accent={settings.accent} />
-          <div className="state">{t('state.' + status.state)}</div>
+          <div className="state">{t(status.state === 'listening' && status.voiceDraft?.waiting ? 'state.waitingContinuation' : 'state.' + status.state)}</div>
+          {status.conversation && <button className="chip ok" onClick={() => void api.invoke(IPC.conversationEnd)}>{t('conversation.end')}</button>}
           <div className="live">
             <AnimatePresence mode="wait">
               <motion.span key={live} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
@@ -405,7 +406,7 @@ export function AssistantPage() {
             </AnimatePresence>
           </div>
           <LiveSteps status={status} />
-          <div className="hint">{status.listeningForWake && !status.steps?.length ? t('home.hint', { hotkey }) : ''}</div>
+          <div className="hint">{status.conversation ? t('conversation.hint') : status.listeningForWake && !status.steps?.length ? t('home.hint', { hotkey }) : ''}</div>
           <div className="chips">
             <span className={'chip ' + (status.opencode === 'ready' || status.opencode === 'sleeping' ? 'ok' : status.opencode === 'error' ? 'bad' : 'warn')}>
               <i className="dot" />

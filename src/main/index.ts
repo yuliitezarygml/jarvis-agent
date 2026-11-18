@@ -256,6 +256,7 @@ function applySettings(patch: Partial<Settings>) {
   if ((patch.permissionMode && patch.permissionMode !== before.permissionMode) || (patch.cwd !== undefined && patch.cwd !== before.cwd) || (patch.customProvider && JSON.stringify(patch.customProvider) !== JSON.stringify(before.customProvider)) || (patch.connectors && JSON.stringify(patch.connectors) !== JSON.stringify(before.connectors)))
     void assistant.opencode.restart()
   if (patch.autoUpdate) updater.setMode(patch.autoUpdate)
+  if (patch.conversationIdleSeconds !== undefined && assistant.speech.conversation) assistant.speech.setConversation(true)
   if (patch.hotkey !== undefined) registerHotkey()
   if (patch.autoStart !== undefined) applyAutoStart()
   if (patch.hudCorner) {
@@ -279,10 +280,20 @@ function wireIpc() {
   ipcMain.handle(IPC.chatHistory, () => assistant.opencode.history())
   ipcMain.handle(IPC.sendText, (_e, text: string) => assistant.handleCommand(text, 'text'))
   ipcMain.handle(IPC.abort, () => assistant.abortTask())
-  ipcMain.handle(IPC.chatReset, () => assistant.opencode.newThread())
+  ipcMain.handle(IPC.conversationEnd, () => assistant.endConversation())
+  ipcMain.handle(IPC.chatReset, () => {
+    assistant.speech.cancelListen()
+    return assistant.opencode.newThread()
+  })
   ipcMain.handle(IPC.threads, () => assistant.threads.state())
-  ipcMain.handle(IPC.threadNew, () => assistant.opencode.newThread())
-  ipcMain.handle(IPC.threadSwitch, (_e, id: string) => assistant.opencode.switchThread(id))
+  ipcMain.handle(IPC.threadNew, () => {
+    assistant.speech.cancelListen()
+    return assistant.opencode.newThread()
+  })
+  ipcMain.handle(IPC.threadSwitch, (_e, id: string) => {
+    assistant.speech.cancelListen()
+    return assistant.opencode.switchThread(id)
+  })
   ipcMain.handle(IPC.threadDelete, (_e, id: string) => assistant.opencode.deleteThread(id))
   ipcMain.handle(IPC.threadRename, (_e, id: string, title: string) => assistant.threads.rename(id, title))
   ipcMain.handle(IPC.models, (_e, fetchAll: boolean) => assistant.opencode.listModels(fetchAll))
@@ -413,7 +424,7 @@ function wireIpc() {
   ipcMain.on(IPC.audioChunk, (_e, buf: ArrayBuffer) => assistant.speech.feed(buf))
   ipcMain.on(IPC.micLevel, (_e, level: number) => toUi(IPC.micLevel, level))
   ipcMain.on(IPC.ttsLevel, (_e, level: number) => toUi(IPC.ttsLevel, level))
-  ipcMain.on(IPC.ttsEnded, (_e, id: string) => assistant.onPlayEnded(id))
+  ipcMain.on(IPC.ttsEnded, (_e, id: string, completed = true) => assistant.onPlayEnded(id, completed))
 }
 
 // ---- dependency installer: one queue, so the launch-time auto install and the Setup button never race ----
@@ -566,6 +577,7 @@ async function debugShots(dir: string) {
 app.on('second-instance', showMain)
 app.on('before-quit', () => {
   quitting = true
+  assistant?.speech.cancelListen()
 })
 app.on('will-quit', () => globalShortcut.unregisterAll())
 app.on('window-all-closed', () => {})

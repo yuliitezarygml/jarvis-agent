@@ -8,6 +8,7 @@ import type { ChatItem, ConnectorConfig, ConnectorStatus, ModelInfo, PermissionR
 import { splitCommand } from '../shared/connectors'
 import { JARVIS_PROMPT } from './agent-prompt'
 import { dataDir, ThreadStore } from './store'
+import { ResponseGate } from './response-gate'
 
 const FREE_DEFAULTS: ModelInfo[] = [
   { id: 'opencode/glm-5.3-flash-free', name: 'GLM 5.3 Flash (free)', free: true, vision: true, provider: 'opencode' },
@@ -86,6 +87,9 @@ export class Opencode extends EventEmitter {
   private items = new Map<string, ChatItem>()
   private pendingPerms = new Map<string, { kind: 'permission' | 'question'; sessionID: string }>()
   private busy = false
+  private requestVersion = 0
+  private pendingPrompt: Promise<unknown> | null = null
+  private readonly outputGate = new ResponseGate()
   private restarts = 0
   lastEventAt = Date.now()
   private currentVia: 'voice' | 'text' = 'text'
@@ -341,6 +345,7 @@ export class Opencode extends EventEmitter {
   }
 
   private useSession(id: string) {
+    this.outputGate.reset()
     this.sessionId = id
     this.items.clear()
     this.partItem.clear()
@@ -442,10 +447,12 @@ export class Opencode extends EventEmitter {
     if (!p.sessionID || p.sessionID === this.sessionId) this.lastEventAt = Date.now()
     if (p.sessionID && this.sessionId && p.sessionID !== this.sessionId && !ev.type?.startsWith('permission') && !ev.type?.startsWith('question')) return
     if (ev.type === 'session.updated' && p.info?.id && p.info.title) this.threads.setTitleFromSession(p.info.id, p.info.title)
+    if (this.aborted && ev.type !== 'session.updated') return
     switch (ev.type) {
       case 'message.updated': {
         const info = p.info
         if (info?.id) this.roles.set(info.id, info.role)
+        if (!this.outputGate.message(info ?? {})) break
         if (info?.role === 'assistant' && info.error && info.error.name !== 'MessageAbortedError') {
           this.emit('error', this.errorText(info.error))
         }
@@ -454,6 +461,7 @@ export class Opencode extends EventEmitter {
       case 'message.part.updated': {
         const part = p.part
         if (!part) break
+        if (!this.outputGate.part(part.messageID)) break
         this.partType.set(part.id, part.type)
         const role = this.roles.get(part.messageID)
         if (part.type === 'text') {
@@ -474,6 +482,7 @@ export class Opencode extends EventEmitter {
       }
       case 'message.part.delta': {
         if (p.field !== 'text') break
+        if (!this.outputGate.part(p.messageID)) break
         if (this.partType.get(p.partID) === 'reasoning') {
           const th = this.items.get(p.partID)
           this.upsert(th && th.kind === 'thinking' ? { ...th, text: th.text + p.delta } : { id: p.partID, kind: 'thinking', text: p.delta, at: Date.now(), done: false })
@@ -492,11 +501,11 @@ export class Opencode extends EventEmitter {
         const t = p.status?.type
         if (t === 'busy' || t === 'retry') this.setBusy(true)
         if (t === 'retry') this.onRetry(p.status)
-        else if (t === 'idle') this.finishTurn()
+        else if (t === 'idle' && this.outputGate.hasOutput) this.finishTurn()
         break
       }
       case 'session.idle':
-        this.finishTurn()
+        if (this.outputGate.hasOutput) this.finishTurn()
         break
       case 'session.error': {
         if (p.error?.name !== 'MessageAbortedError') this.emit('error', this.errorText(p.error))
@@ -581,11 +590,14 @@ export class Opencode extends EventEmitter {
   }
 
   async send(text: string, system: string, via: 'voice' | 'text') {
+    const version = ++this.requestVersion
     await this.wake()
+    if (version !== this.requestVersion) return
     if (this.status !== 'ready') throw new Error('Agent is not ready: ' + this.status)
     this.armSleep()
     this.currentVia = via
     this.aborted = false
+    this.outputGate.begin()
     this.limitReported = false
     const [providerID, ...rest] = this.getSettings().model.split('/')
     const cur = this.threads.current
@@ -593,12 +605,14 @@ export class Opencode extends EventEmitter {
     this.lastEventAt = Date.now()
     this.setBusy(true)
     this.emit('turnStart', via)
-    await this.req('POST', `/session/${this.sessionId}/prompt_async`, {
+    const request = this.req('POST', `/session/${this.sessionId}/prompt_async`, {
       agent: 'jarvis',
       model: { providerID, modelID: rest.join('/') },
       system,
       parts: [{ type: 'text', text }]
-    })
+    }, 5000)
+    this.pendingPrompt = request
+    try { await request } finally { if (this.pendingPrompt === request) this.pendingPrompt = null }
   }
 
   get lastVia() {
@@ -606,11 +620,23 @@ export class Opencode extends EventEmitter {
   }
 
   async abort() {
+    this.requestVersion++
+    this.outputGate.pause()
     this.aborted = true
     if (!this.sessionId) return
     try {
-      await this.req('POST', `/session/${this.sessionId}/abort`)
-    } catch {}
+      // The earlier POST must be accepted before we cancel it; otherwise abort can overtake prompt_async.
+      await this.pendingPrompt?.catch(() => {})
+      await this.req('POST', `/session/${this.sessionId}/abort`, undefined, 5000)
+      if (!this.outputGate.hasParent) {
+        // Cancellation can happen before the first SSE message identifies the old parent.
+        const recent = await this.req<any[]>('GET', `/session/${this.sessionId}/message?limit=10`, undefined, 1500)
+        for (const item of recent ?? []) if (item.info?.role === 'user') this.outputGate.blockParent(item.info.id)
+      }
+    } catch {
+      // Never start another prompt while an unacknowledged old task can still call tools.
+      await this.stop()
+    }
     this.finishTurn()
   }
 

@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'crypto'
 import { spawn } from 'child_process'
 import { DEFAULT_SETTINGS } from '../shared/types'
 import type { AppStatus, AssistantState, ChatItem, HighlightTarget, PermissionRequest, Routine, RoutineStep, ToolEvent } from '../shared/types'
-import { phraseScore, normalize } from '../shared/textmatch'
+import { phraseScore, normalize, hasSpokenCorrection } from '../shared/textmatch'
 import { SettingsStore, MemoryStore, RoutineStore, ThreadStore, dataDir } from './store'
 import { Opencode } from './opencode'
 import { JarvisMcp, Hub } from './mcp'
@@ -18,6 +18,7 @@ import { XttsSidecar } from './xtts'
 import { buildSystemExtra } from './agent-prompt'
 import { matchFast } from './fast-commands'
 import { pathsFor } from './models'
+import { conversationControl } from '../shared/conversation'
 
 let idSeq = 0
 const uid = () => `x${Date.now().toString(36)}${(idSeq++).toString(36)}`
@@ -53,7 +54,7 @@ export class Assistant extends EventEmitter implements Hub {
   state: AssistantState = 'idle'
   private speakingDepth = 0
   private speakAbort = { aborted: false }
-  private playResolvers = new Map<string, () => void>()
+  private playResolvers = new Map<string, (completed: boolean) => void>()
   private askResolve: ((a: string) => void) | null = null
   private askId = ''
   private pendingConfirms = new Map<string, (ok: boolean) => void>()
@@ -62,6 +63,7 @@ export class Assistant extends EventEmitter implements Hub {
   private lastWasVoice = false
   private busyTranscribing = false
   private commandListening = false
+  private voiceDraft: AppStatus['voiceDraft']
   private sttWatchdog: NodeJS.Timeout | null = null
   private userSpeaking = false
   private bannerMessage = ''
@@ -91,6 +93,13 @@ export class Assistant extends EventEmitter implements Hub {
   private askQueue: Promise<string> = Promise.resolve('')
   private askQuestion = ''
   private ackPreparing = false
+  private commandRevision = 0
+  private commandPending = false
+  private inputPaused = false
+  private interruption: Promise<void> = Promise.resolve()
+  private interruptionContext = ''
+  private spokenSentences: string[] = []
+  private routinesRunning = 0
 
   constructor() {
     super()
@@ -164,9 +173,11 @@ export class Assistant extends EventEmitter implements Hub {
       setTimeout(() => this.state === 'error' && this.setState('idle'), 2500)
     })
     this.opencode.on('limit', async (l: { message: string; waitMs: number; quota: boolean; free: boolean }) => {
+      const revision = this.commandRevision
       console.log('[agent] provider limit / long retry:', l.message, Math.round(l.waitMs / 1000) + 's')
       // free models have separate quotas: when one is used up, move to the next free model and redo the request
-      if (await this.switchFreeModel(l.waitMs)) return
+      const switched = await this.switchFreeModel(l.waitMs)
+      if (switched || revision !== this.commandRevision || this.inputPaused) return
       const ru = this.lastLang === 'ru'
       const hours = l.waitMs > 3_600_000 ? Math.round(l.waitMs / 3_600_000) : 0
       const when = l.waitMs > 60_000 ? (ru ? (hours ? ` (снова доступна примерно через ${hours} ч)` : ` (снова доступна через ${Math.ceil(l.waitMs / 60_000)} мин)`) : hours ? ` (available again in about ${hours} h)` : ` (available again in ${Math.ceil(l.waitMs / 60_000)} min)`) : ''
@@ -182,6 +193,8 @@ export class Assistant extends EventEmitter implements Hub {
       void this.say(l.quota ? (ru ? 'Сэр, бесплатный лимит модели исчерпан. Выберите другую модель в настройках.' : 'Sir, the free model limit is used up. Please pick another model in Settings.') : ru ? 'Сэр, модель сейчас не отвечает.' : 'Sir, the model is not responding right now.')
     })
     this.opencode.on('turnStart', () => {
+      this.speech.setResponding(true)
+      this.spokenSentences = []
       this.sayCalledThisTurn = false
       this.controlPrompt = null
       this.mcp.newTask()
@@ -197,6 +210,7 @@ export class Assistant extends EventEmitter implements Hub {
       this.setState('thinking')
     })
     this.opencode.on('turnEnd', () => {
+      this.speech.setResponding(false)
       this.liveSteps = []
       this.turnStartedAt = 0
       this.setActivity('')
@@ -230,6 +244,7 @@ export class Assistant extends EventEmitter implements Hub {
 
   // ---------------------------------------------------------------- status/state
   setState(s: AssistantState) {
+    if (s === 'idle' && this.speech?.conversation) s = 'listening'
     if (this.state === s) return
     this.state = s
     this.emitStatus()
@@ -243,7 +258,9 @@ export class Assistant extends EventEmitter implements Hub {
       opencode: this.opencode?.status ?? 'starting',
       speech: miss.length ? 'missing-models' : this.speech.ready ? 'ready' : 'loading',
       tts: this.tts.available(s.voiceEn) || this.tts.available(s.voiceRu) ? 'ready' : 'missing-voice',
-      listeningForWake: this.speech.ready && s.wakeEnabled,
+      listeningForWake: this.speech.ready && s.wakeEnabled && !this.speech.conversation,
+      voiceDraft: this.voiceDraft,
+      conversation: this.speech.conversation,
       clone: this.xtts.state,
       message: this.bannerMessage || undefined,
       activity: this.activity || undefined,
@@ -270,11 +287,45 @@ export class Assistant extends EventEmitter implements Hub {
         break
       case 'speech':
         this.userSpeaking = e.on
+        if (e.on && this.speech.conversation) {
+          if (this.askResolve) this.stopSpeaking()
+          else if (this.speakingDepth > 0 || this.opencode.isBusy || this.controlOn || this.routinesRunning || this.commandPending) this.interruptForSpeech()
+        }
         this.emit('speechActivity', e.on)
         if (e.on && (this.state === 'idle')) this.emit('hint', 'hearing')
         break
       case 'partial':
+        if (!this.speech.commandDraft) this.emit('partial', e.text)
+        break
+      case 'conversation':
+        if (!e.on && e.reason === 'idle') {
+          this.interruptForSpeech()
+          this.emit('chat', { id: uid(), kind: 'system', text: this.lastLang === 'ru' ? 'Разговор завершён после долгой тишины.' : 'Conversation ended after inactivity.', at: Date.now() } satisfies ChatItem)
+        }
+        this.setState(e.on ? 'listening' : 'idle')
+        this.emitStatus()
+        break
+      case 'conversationPause':
+        this.setState('listening')
+        break
+      case 'draft':
+        this.voiceDraft = e.text || e.waiting ? { text: e.text, waiting: e.waiting } : undefined
         this.emit('partial', e.text)
+        if (e.text || e.waiting) this.setState('listening')
+        this.emitStatus()
+        break
+      case 'inputExpired':
+        this.emit('chat', {
+          id: uid(), kind: 'system', at: Date.now(),
+          text: this.settings().interfaceLang === 'en'
+            ? e.reason === 'recognition'
+              ? 'The continuation could not be recognised. The command was not executed. Please start a new request.'
+              : 'The voice command was not completed and was not executed. Start a new request when you are ready.'
+            : e.reason === 'recognition'
+              ? 'Не удалось распознать продолжение. Команда не выполнена. Повтори запрос с начала.'
+              : 'Голосовая команда не завершена и не выполнена. Когда будешь готов, обратись ко мне снова.'
+        } satisfies ChatItem)
+        this.backToRest()
         break
       case 'wake':
         void this.opencode.wake() // the agent may be unloaded while idle: start it while the user is still talking
@@ -291,13 +342,18 @@ export class Assistant extends EventEmitter implements Hub {
         if (e.on) {
           this.setState('transcribing')
           // safety net: never stay on "transcribing" longer than a generous decode time
-          this.sttWatchdog = setTimeout(() => this.backToRest(), 45000)
+          this.sttWatchdog = setTimeout(() => {
+            this.speech.cancelListen()
+            this.backToRest()
+          }, 45000)
+        } else if (this.speech.commandDraft) {
+          this.setState('listening')
         }
         break
       case 'mode':
         this.commandListening = e.mode === 'command'
         if (e.mode === 'wake' && this.askResolve && e.timedOut) this.resolveAsk('')
-        if (e.mode === 'wake' && this.state === 'listening') {
+        if (e.mode === 'wake' && this.state === 'listening' && !this.speech.conversation) {
           this.setState('idle')
           if (e.timedOut) this.emit('earcon', 'sleep')
         }
@@ -380,6 +436,7 @@ export class Assistant extends EventEmitter implements Hub {
 
   /** Say "Yes, sir?" (or similar) the moment the wake word is confirmed, so the user knows Jarvis heard them. */
   async ack(langHint = '') {
+    const epoch = this.sayEpoch
     const s = this.settings()
     if (s.wakeAck === 'off' || !s.voiceEnabled || this.speakingDepth > 0) return
     const lang: 'ru' | 'en' = langHint === 'ru' || langHint === 'en' ? langHint : this.lastLang
@@ -405,16 +462,16 @@ export class Assistant extends EventEmitter implements Hub {
         }
         label = line
       }
-      if (!wav) return
+      if (!wav || epoch !== this.sayEpoch) return
       this.lastAck = label
       this.speakingDepth++
-      this.speech.speaking(true)
+      this.speech.speaking(true, label)
       this.emit('subtitle', label)
       await Promise.race([this.play({ id: uid(), wav, fx: s.voiceFx, volume: s.voiceVolume }), new Promise((r) => setTimeout(r, wavMillis(wav!) + 4000))])
     } catch (e) {
       console.warn('[ack] failed', (e as Error).message)
     } finally {
-      if (wav) {
+      if (wav && epoch === this.sayEpoch) {
         this.speakingDepth = Math.max(0, this.speakingDepth - 1)
         if (this.speakingDepth === 0) {
           this.speech.speaking(false)
@@ -433,12 +490,13 @@ export class Assistant extends EventEmitter implements Hub {
 
   private onWake() {
     if (this.speakingDepth > 0) this.stopSpeaking()
-    this.emit('wake')
+    if (!this.speech.conversation) this.emit('wake')
     this.setState('listening')
   }
 
   private async onTranscript(text: string, lang: string, viaWake = false) {
     text = text.trim()
+    const control = conversationControl(text, this.settings().wakePhrases, this.settings().wakeSensitivity)
     if (this.isAckEcho(text)) {
       // Jarvis heard his own "Yes, sir" through the speakers — not a command
       this.speech.listenFor(this.settings().followupSeconds)
@@ -446,6 +504,11 @@ export class Assistant extends EventEmitter implements Hub {
       return
     }
     if (this.askResolve) {
+      if (control) {
+        this.resolveAsk('')
+        await this.handleCommand(text, 'voice', lang)
+        return
+      }
       if (this.isQuestionEcho(text)) return
       this.resolveAsk(text)
       this.setState('thinking')
@@ -456,47 +519,83 @@ export class Assistant extends EventEmitter implements Hub {
       // only the wake word was said — keep listening for the actual command, and confirm out loud that we heard it
       this.speech.listenFor(this.settings().followupSeconds)
       this.setState('listening')
-      if (viaWake) void this.ack(lang)
+      if (viaWake && !this.speech.conversation) void this.ack(lang)
       return
     }
-    if (viaWake && this.settings().wakeAck === 'always') void this.ack(lang)
+    if (viaWake && !this.speech.conversation && !control && this.settings().wakeAck === 'always') void this.ack(lang)
     await this.handleCommand(text, 'voice', lang)
   }
 
   /** Entry point for anything the user says or types. */
-  async handleCommand(text: string, via: 'voice' | 'text', lang = '') {
+  async handleCommand(text: string, via: 'voice' | 'text', lang = '', nested = false) {
+    const revision = nested ? this.commandRevision : ++this.commandRevision
+    if (!nested) this.speech.cancelListen(false)
+    this.commandPending = true
+    this.speech.setResponding(true)
+    try {
+      await this.interruption
+      if (revision !== this.commandRevision) return
+      this.inputPaused = false
+      this.spokenSentences = []
+      await this.dispatchCommand(text, via, lang, revision)
+    } finally {
+      if (revision === this.commandRevision) {
+        this.commandPending = false
+        this.speech.setResponding(this.opencode.isBusy || this.routinesRunning > 0)
+      }
+    }
+  }
+
+  private async dispatchCommand(text: string, via: 'voice' | 'text', lang: string, revision: number) {
     this.lastWasVoice = via === 'voice'
     this.lastLang = lang === 'ru' || /[а-яё]/i.test(text) ? 'ru' : 'en'
     if (this.speakingDepth > 0) this.stopSpeaking()
     if (this.opencode.isBusy) {
-      this.mcp.computer.cancel() // a new request supersedes the running one: drop any queued clicks/keys
-      await this.opencode.abort()
+      this.mcp.pause() // a new request supersedes the running one
+      this.interruption = this.interruption.then(() => this.opencode.abort())
+      await this.interruption
     }
+    if (revision !== this.commandRevision) return
     this.emit('chat', { id: uid(), kind: 'user', text, at: Date.now(), via } satisfies ChatItem)
 
+    const control = conversationControl(text, this.settings().wakePhrases, this.settings().wakeSensitivity)
+    if (control?.action === 'end') {
+      this.endConversation()
+      return
+    }
+    if (control?.action === 'start') {
+      const already = this.speech.conversation
+      this.speech.setConversation(true)
+      if (!control.topic) {
+        if (!already) void this.say(this.lastLang === 'ru' ? 'Я слушаю, сэр. О чём поговорим?' : "I'm listening, sir. What shall we talk about?")
+        return
+      }
+      text = control.topic
+    }
+
     const quick = text.toLowerCase().replace(/[^\p{L}\s]/gu, '').trim()
-    if (/^(стоп|отмена|отмени|хватит|замолчи|stop|cancel|abort|enough|never ?mind)$/.test(quick)) {
-      this.mcp.computer.cancel()
-      await this.opencode.abort()
-      this.stopSpeaking()
-      this.setState('idle')
+    if (/^(стоп|отмена|отмени|отмени команду|хватит|замолчи|stop|cancel|cancel command|abort|enough|never ?mind)$/.test(quick)) {
+      this.interruptForSpeech()
       return
     }
 
     if (/^(новый (диалог|чат|разговор)|начни (с начала|заново|сначала)|забудь (разговор|диалог|всё что было)|new (chat|conversation|thread)|start (over|fresh)|forget (this|the) (chat|conversation))$/.test(quick)) {
       await this.opencode.newThread()
+      if (revision !== this.commandRevision) return
       this.emit('chat', { id: uid(), kind: 'system', text: '✦ New conversation', at: Date.now() } satisfies ChatItem)
       void this.say(/[а-яё]/.test(quick) ? 'Начинаем с чистого листа, сэр.' : 'A clean slate, sir.')
       return
     }
 
     // instant commands (volume, media keys, desktop) never wait for the model
+    const corrected = hasSpokenCorrection(text)
     const fast = matchFast(text)
     if (fast) {
       try {
         if (fast.kind === 'volume') await this.win.call('volume', { action: fast.action, level: fast.level, step: fast.step })
         else if (fast.kind === 'media') await this.win.call('keys', { keys: { play_pause: 'playpause', next: 'nexttrack', previous: 'prevtrack' }[fast.action] })
         else await this.win.call('desktop', { action: fast.action })
+        if (revision !== this.commandRevision) return
         this.emit('chat', { id: uid(), kind: 'system', text: '⚡ ' + fast.say[this.lastLang === 'ru' ? 0 : 1], at: Date.now() } satisfies ChatItem)
         if (via === 'voice' && fast.kind !== 'media') void this.say(fast.say[this.lastLang === 'ru' ? 0 : 1])
         return
@@ -506,15 +605,16 @@ export class Assistant extends EventEmitter implements Hub {
     }
 
     await this.autoThread()
+    if (revision !== this.commandRevision) return
 
-    const r = this.matchRoutine(text)
+    const r = corrected ? null : this.matchRoutine(text)
     if (r) {
       this.emit('chat', { id: uid(), kind: 'system', text: `▶ ${r.name}`, at: Date.now() } satisfies ChatItem)
       this.setState('thinking')
       try {
         await this.runRoutine(r)
       } finally {
-        this.setState('idle')
+        if (revision === this.commandRevision) this.setState(this.speech.conversation ? 'listening' : 'idle')
       }
       return
     }
@@ -531,7 +631,9 @@ export class Assistant extends EventEmitter implements Hub {
         vision: this.isVision(),
         time: new Date().toLocaleString('en-GB', { dateStyle: 'full', timeStyle: 'short' }),
         custom: s.customSystemPrompt,
-        connectors: (s.connectors ?? []).filter((c) => c.enabled).map((c) => c.id)
+        connectors: (s.connectors ?? []).filter((c) => c.enabled).map((c) => c.id),
+        conversation: this.speech.conversation,
+        interruption: this.interruptionContext
       })
       this.nudges = 0
       this.lastSystem = system
@@ -539,7 +641,9 @@ export class Assistant extends EventEmitter implements Hub {
       this.lastUserText = text
       this.freeSwitches = 0
       await this.opencode.send(text, system, via)
+      if (revision === this.commandRevision) this.interruptionContext = ''
     } catch (e: any) {
+      if (revision !== this.commandRevision) return
       this.emit('chat', { id: uid(), kind: 'system', text: `⚠ ${e?.message || e}`, at: Date.now() } satisfies ChatItem)
       this.setState('idle')
     }
@@ -550,6 +654,8 @@ export class Assistant extends EventEmitter implements Hub {
 
   /** The current free model hit its limit: remember that, switch to the next usable free model and re-send the request. */
   private async switchFreeModel(waitMs: number): Promise<boolean> {
+    const revision = this.commandRevision
+    if (this.inputPaused) return false
     const cur = this.settings().model
     if (!/^opencode\/.+-free$/.test(cur) || !this.lastUserText || this.freeSwitches >= 3) return false
     const now = Date.now()
@@ -558,6 +664,7 @@ export class Assistant extends EventEmitter implements Hub {
     blocked[cur] = now + Math.max(waitMs, 30 * 60_000)
     this.settingsStore.set({ freeBlocked: blocked })
     const models = await this.opencode.listModels(true).catch(() => [])
+    if (revision !== this.commandRevision || this.inputPaused) return false
     const free = models.filter((m) => m.provider === 'opencode' && m.free && !/-vl-/.test(m.id)).map((m) => m.id)
     const rank = (id: string) => {
       const i = Assistant.FREE_ORDER.indexOf(id.replace(/^opencode\//, ''))
@@ -572,6 +679,7 @@ export class Assistant extends EventEmitter implements Hub {
     this.emit('chat', { id: uid(), kind: 'system', text: ru ? `↻ Лимит модели «${name(cur)}» исчерпан — переключаюсь на «${name(next)}» и повторяю запрос.` : `↻ "${name(cur)}" hit its free limit — switching to "${name(next)}" and retrying.`, at: now } satisfies ChatItem)
     // let the aborted turn finish, then ask again with the new model
     for (let i = 0; i < 50 && this.opencode.isBusy; i++) await new Promise((r) => setTimeout(r, 100))
+    if (revision !== this.commandRevision || this.inputPaused) return false
     try {
       await this.opencode.send(this.lastUserText, this.lastSystem, this.lastVia)
     } catch (e: any) {
@@ -583,6 +691,7 @@ export class Assistant extends EventEmitter implements Hub {
 
   /** Long pause since the last message → start a fresh conversation so old context doesn't bleed into new tasks. */
   private async autoThread() {
+    if (this.speech.conversation) return
     const mins = this.settings().autoNewThreadMinutes
     const cur = this.threads.current
     if (!mins || !cur || !cur.title) return
@@ -637,6 +746,11 @@ export class Assistant extends EventEmitter implements Hub {
   }
 
   private async onTurnEnd() {
+    const revision = this.commandRevision
+    if (this.opencode.aborted || this.inputPaused) {
+      this.setState(this.speech.conversation ? 'listening' : 'idle')
+      return
+    }
     // Weaker models sometimes forget to talk — speak a short gist so voice requests never end in silence.
     if (this.lastWasVoice && !this.sayCalledThisTurn && this.lastAssistantText.trim()) {
       const gist = this.lastAssistantText
@@ -646,7 +760,7 @@ export class Assistant extends EventEmitter implements Hub {
       const first = splitSentences(gist)[0] ?? ''
       if (first && first.length <= 220) await this.say(first)
     }
-    if (this.speakingDepth === 0) this.setState('idle')
+    if (revision === this.commandRevision && this.speakingDepth === 0) this.setState(this.speech.conversation ? 'listening' : 'idle')
   }
 
   // ---------------------------------------------------------------- speaking
@@ -655,6 +769,7 @@ export class Assistant extends EventEmitter implements Hub {
    * talks; lines never overlap. stopSpeaking() drops everything still queued.
    */
   say(text: string, highlights: HighlightTarget[] = [], opts: { silent?: boolean } = {}): Promise<void> {
+    if (this.inputPaused) return Promise.resolve()
     if (!opts.silent) this.sayCalledThisTurn = true
     const epoch = this.sayEpoch
     const run = async () => {
@@ -667,6 +782,7 @@ export class Assistant extends EventEmitter implements Hub {
   }
 
   private async sayNow(text: string, highlights: HighlightTarget[] = [], opts: { silent?: boolean } = {}) {
+    const epoch = this.sayEpoch
     if (!opts.silent) this.sayCalledThisTurn = true
     const s = this.settings()
     const clean = speakable(text)
@@ -712,60 +828,113 @@ export class Assistant extends EventEmitter implements Hub {
           }
         }
         let next = synth(sentences[0])
+        void next.catch(() => {}) // a prefetched sentence can be abandoned by an interruption
         for (let i = 0; i < sentences.length; i++) {
           const wav = await next
           if (token.aborted) break
-          if (i + 1 < sentences.length) next = synth(sentences[i + 1])
-          await Promise.race([
+          if (i + 1 < sentences.length) {
+            next = synth(sentences[i + 1])
+            void next.catch(() => {})
+          }
+          this.speech.speaking(true, sentences[i])
+          const completed = await Promise.race([
             this.play({ id: uid(), wav, fx: s.voiceFx && lang === 'en' ? true : s.voiceFx, volume: s.voiceVolume }),
             new Promise((r) => setTimeout(r, wavMillis(wav) + 5000)) // audio host never reported back
           ])
+          if (completed === true && !token.aborted) this.spokenSentences.push(sentences[i])
           if (token.aborted) break
         }
       }
     } catch (e) {
       console.error('[tts] failed', e)
     } finally {
+      if (epoch !== this.sayEpoch) return
       this.speakingDepth = Math.max(0, this.speakingDepth - 1)
       this.lastSpeechAt = Date.now()
       if (this.speakingDepth === 0) {
         this.speech.speaking(false)
         if (highlights.length) setTimeout(() => this.overlay.clear(), 500)
         this.emit('subtitle', '')
-        if (this.state === 'speaking') this.setState(this.opencode.isBusy ? 'thinking' : 'idle')
+        if (this.state === 'speaking') this.setState(this.opencode.isBusy ? 'thinking' : this.speech.conversation ? 'listening' : 'idle')
       }
     }
   }
 
   private play(req: PlayRequest) {
-    return new Promise<void>((resolve) => {
+    return new Promise<boolean>((resolve) => {
       this.playResolvers.set(req.id, resolve)
       this.emit('play', req)
     })
   }
 
-  onPlayEnded(id: string) {
+  onPlayEnded(id: string, completed = true) {
     const r = this.playResolvers.get(id)
     this.playResolvers.delete(id)
-    r?.()
+    r?.(completed)
   }
 
   /** Stop button / abort IPC: cancel the agent turn and any in-flight computer actions. */
   async abortTask() {
-    this.mcp.computer.cancel()
-    await this.opencode.abort()
+    this.commandRevision++
+    this.commandPending = false
+    this.inputPaused = true
+    this.speech.cancelListen()
+    this.mcp.pause()
     this.stopSpeaking()
     this.setControl(false)
     this.setState('idle')
+    this.resolveAsk('')
+    this.interruption = this.interruption.then(() => this.opencode.abort())
+    await this.interruption
   }
 
   stopSpeaking() {
     this.sayEpoch++ // also cancels lines that are still queued
     this.speakAbort.aborted = true
+    this.sayChain = Promise.resolve()
+    this.speakingDepth = 0
+    this.speech.speaking(false)
     this.emit('stopPlayback')
-    for (const [, r] of this.playResolvers) r()
+    for (const [, r] of this.playResolvers) r(false)
     this.playResolvers.clear()
     this.overlay.clear()
+    this.emit('subtitle', '')
+  }
+
+  /** Preserve microphone capture while invalidating the previous response and its remaining actions. */
+  private interruptForSpeech() {
+    if (this.inputPaused && !this.commandPending) return
+    this.inputPaused = true
+    this.commandPending = false
+    this.commandRevision++
+    this.interruptionContext = [
+      'The user interrupted the previous response/task. Do not resume it automatically.',
+      `Fully played sentences: ${this.spokenSentences.join(' ') || '(none confirmed)'}`,
+      `Completed tool steps: ${this.liveSteps.filter((s) => s.status === 'done').map((s) => s.label).join('; ') || '(none recorded)'}`,
+      'Other text in the history may not have been heard. Some actions may already have happened; inspect the current state before repeating them. Use the new utterance to resolve the correction.'
+    ].join('\n')
+    this.mcp.pause()
+    this.stopSpeaking()
+    this.setControl(false)
+    this.resolveAsk('')
+    for (const [id, answer] of this.pendingConfirms) {
+      answer(false)
+      this.emit('permissionClose', id)
+    }
+    this.pendingConfirms.clear()
+    this.controlPrompt = null
+    this.speech.setResponding(false)
+    this.interruption = this.interruption.then(() => this.opencode.abort()).catch((e) => {
+      this.emit('chat', { id: uid(), kind: 'system', text: String(e?.message || e), at: Date.now() } satisfies ChatItem)
+    })
+    this.setState(this.speech.conversation ? 'listening' : 'idle')
+  }
+
+  endConversation() {
+    this.interruptForSpeech()
+    this.speech.setConversation(false)
+    this.setState('idle')
+    this.emit('earcon', 'sleep')
   }
 
   highlight(targets: HighlightTarget[], ttlMs = 8000) {
@@ -782,13 +951,15 @@ export class Assistant extends EventEmitter implements Hub {
    * answer can also be tapped / typed on the HUD or in the chat; whichever comes first closes the card everywhere.
    */
   ask(question: string, options?: string[], timeoutSec = 25): Promise<string> {
-    const run = () => this.askNow(question, options, timeoutSec)
+    const revision = this.commandRevision
+    const run = () => revision === this.commandRevision && !this.inputPaused ? this.askNow(question, options, timeoutSec) : Promise.resolve('')
     const p = this.askQueue.then(run, run)
     this.askQueue = p.catch(() => '')
     return p
   }
 
   private async askNow(question: string, options: string[] | undefined, timeoutSec: number): Promise<string> {
+    const revision = this.commandRevision
     const ru = this.lastLang === 'ru'
     const id = 'ask-' + uid()
     this.askId = id
@@ -804,17 +975,27 @@ export class Assistant extends EventEmitter implements Hub {
     let timer: NodeJS.Timeout | null = null
     const answered = new Promise<string>((resolve) => {
       this.askResolve = resolve
-      timer = setTimeout(() => this.askId === id && this.resolveAsk(''), (timeoutSec + 12) * 1000)
+      const hardLimit = Date.now() + (timeoutSec + 132) * 1000
+      const expire = () => {
+        if (this.askId !== id) return
+        if ((this.userSpeaking || this.speech.commandDraft || this.busyTranscribing) && Date.now() < hardLimit) {
+          timer = setTimeout(expire, 500)
+        } else this.resolveAsk('')
+      }
+      timer = setTimeout(expire, (timeoutSec + 12) * 1000)
     })
     this.commandListening = true
-    this.speech.listenFor(timeoutSec + 12)
+    // Live answers use the same pause protection; ordinary one-shot questions keep their existing path.
+    this.speech.listenFor(timeoutSec + 12, this.speech.conversation, this.speech.conversation)
     this.setState('listening')
     void this.say(question, [], { silent: true }).catch(() => {})
     const a = await answered
     if (timer) clearTimeout(timer)
-    this.askQuestion = ''
-    if (this.speakingDepth > 0) this.stopSpeaking() // answered before the question was finished
-    this.speech.cancelListen()
+    if (revision === this.commandRevision) {
+      this.askQuestion = ''
+      if (this.speakingDepth > 0) this.stopSpeaking()
+      this.speech.cancelListen(false)
+    }
     this.emit('permissionClose', id)
     return a
   }
@@ -839,7 +1020,8 @@ export class Assistant extends EventEmitter implements Hub {
   /** Reply from the UI to either an agent permission/question or a jarvis_ask card. */
   async replyPermission(id: string, answer: 'once' | 'always' | 'reject' | string[] | string) {
     if (id.startsWith('ask-')) {
-      this.speech.cancelListen()
+      if (id !== this.askId) return
+      this.speech.cancelListen(false)
       this.resolveAsk(Array.isArray(answer) ? answer.join(', ') : String(answer))
       return
     }
@@ -907,10 +1089,14 @@ export class Assistant extends EventEmitter implements Hub {
 
   /** Emergency stop (global hotkey): cancel the task, silence, drop permissions, kill the glow. */
   emergencyStop() {
-    this.mcp.computer.cancel()
+    this.commandRevision++
+    this.commandPending = false
+    this.inputPaused = true
+    this.speech.cancelListen()
+    this.mcp.pause()
     this.grantedThreads.clear()
     this.controlPrompt = null
-    void this.opencode.abort()
+    this.interruption = this.interruption.then(() => this.opencode.abort())
     this.stopSpeaking()
     this.setControl(false)
     this.setState('idle')
@@ -1050,27 +1236,52 @@ export class Assistant extends EventEmitter implements Hub {
   // ---------------------------------------------------------------- routines
   async runRoutine(r: Routine): Promise<string> {
     const log: string[] = []
-    for (const step of r.steps) {
-      try {
-        log.push(await this.runStep(step))
-      } catch (e: any) {
-        log.push(`step ${step.type} failed: ${e?.message || e}`)
+    const revision = this.commandRevision
+    const epoch = this.mcp.computer.begin()
+    this.routinesRunning++
+    this.speech.setResponding(true)
+    try {
+      for (const step of r.steps) {
+        if (revision !== this.commandRevision || epoch !== this.mcp.computer.begin()) break
+        try {
+          log.push(await this.runStep(step, epoch))
+        } catch (e: any) {
+          log.push(`step ${step.type} failed: ${e?.message || e}`)
+          break
+        }
       }
+    } finally {
+      this.routinesRunning--
+      this.speech.setResponding(this.opencode.isBusy || this.routinesRunning > 0)
     }
     return log.join('\n')
   }
 
-  private async runStep(step: RoutineStep): Promise<string> {
-    const r = await this.runStepInner(step)
-    if (step.after) await new Promise((res) => setTimeout(res, Math.min(step.after!, 60000)))
+  private async runStep(step: RoutineStep, epoch: number): Promise<string> {
+    const r = await this.runStepInner(step, epoch)
+    if (step.after) await this.routineDelay(Math.min(step.after, 60000), epoch)
+    this.mcp.computer.check(epoch)
     return r
   }
 
-  private async runStepInner(step: RoutineStep): Promise<string> {
-    const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms))
+  private async routineDelay(ms: number, epoch: number) {
+    for (let left = ms; left > 0; left -= 50) {
+      this.mcp.computer.check(epoch)
+      await new Promise((resolve) => setTimeout(resolve, Math.min(50, left)))
+    }
+    this.mcp.computer.check(epoch)
+  }
+
+  private async runStepInner(step: RoutineStep, epoch: number): Promise<string> {
+    const sleep = (ms: number) => this.routineDelay(ms, epoch)
+    const call = (method: string, args: Record<string, unknown>) => {
+      this.mcp.computer.check(epoch)
+      return this.win.call(method, args)
+    }
+    this.mcp.computer.check(epoch)
     switch (step.type) {
       case 'focus':
-        await this.win.call('focus', { title: step.target })
+        await call('focus', { title: step.target })
         return 'focused ' + step.target
       case 'click': {
         let x = step.x ?? 0
@@ -1086,25 +1297,25 @@ export class Assistant extends EventEmitter implements Hub {
           x = Math.round(hit.rect.x + hit.rect.w / 2)
           y = Math.round(hit.rect.y + hit.rect.h / 2)
         }
-        await this.win.call('click', { x, y, button: step.button ?? 'left', count: step.count ?? 1 })
+        await call('click', { x, y, button: step.button ?? 'left', count: step.count ?? 1 })
         return `clicked ${x},${y}`
       }
       case 'move':
-        await this.win.call('move', { x: step.x, y: step.y })
+        await call('move', { x: step.x, y: step.y })
         return 'moved'
       case 'scroll': {
         const n = Math.max(1, Math.min(60, step.amount))
-        await this.win.call('scroll', { ...(step.x !== undefined ? { x: step.x, y: step.y } : {}), dy: step.direction === 'down' ? n : step.direction === 'up' ? -n : 0, dx: step.direction === 'right' ? n : step.direction === 'left' ? -n : 0 })
+        await call('scroll', { ...(step.x !== undefined ? { x: step.x, y: step.y } : {}), dy: step.direction === 'down' ? n : step.direction === 'up' ? -n : 0, dx: step.direction === 'right' ? n : step.direction === 'left' ? -n : 0 })
         return 'scrolled'
       }
       case 'hold': {
-        await this.win.call('keydown', { keys: step.keys, scan: !!step.scan })
+        await call('keydown', { keys: step.keys, scan: !!step.scan })
         try {
           const t0 = Date.now()
           await sleep(Math.min(400, step.ms))
           // auto-repeat like a held physical key
           while (Date.now() - t0 < Math.min(step.ms, 20000)) {
-            await this.win.call('keydown', { keys: step.keys, scan: !!step.scan })
+            await call('keydown', { keys: step.keys, scan: !!step.scan })
             await sleep(35)
           }
         } finally {
@@ -1121,13 +1332,13 @@ export class Assistant extends EventEmitter implements Hub {
       case 'run':
         return (await this.powershell(step.command)).slice(0, 400) || 'ran'
       case 'keys':
-        await this.win.call('keys', { keys: step.keys, scan: !!step.scan })
+        await call('keys', { keys: step.keys, scan: !!step.scan })
         return 'keys'
       case 'type':
-        await this.win.call('type', { text: step.text, char_delay: step.charDelay ?? 4 })
+        await call('type', { text: step.text, char_delay: step.charDelay ?? 4 })
         return 'typed'
       case 'wait':
-        await new Promise((r) => setTimeout(r, Math.min(step.ms, 60000)))
+        await sleep(Math.min(step.ms, 60000))
         return 'waited'
       case 'agent':
         await this.runAgentTask(step.prompt)
@@ -1142,7 +1353,7 @@ export class Assistant extends EventEmitter implements Hub {
         resolve()
       }
       this.opencode.on('turnEnd', done)
-      void this.handleCommand(prompt, 'text').catch(done)
+      void this.handleCommand(prompt, 'text', '', true).then(() => { if (!this.opencode.isBusy) done() }, done)
     })
   }
 
@@ -1166,7 +1377,11 @@ export class Assistant extends EventEmitter implements Hub {
 
   // ---------------------------------------------------------------- manual controls
   toggleListen() {
-    if (this.state === 'listening') {
+    if (this.speech.conversation) {
+      this.endConversation()
+      return
+    }
+    if (this.state === 'listening' || this.state === 'transcribing' || this.speech.commandDraft) {
       this.speech.cancelListen()
       this.setState('idle')
       return

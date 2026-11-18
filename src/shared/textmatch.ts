@@ -47,6 +47,11 @@ export function normalize(s: string): string {
     .trim()
 }
 
+/** Corrections need interpretation before a fixed command or fuzzy routine can execute. */
+export function hasSpokenCorrection(text: string): boolean {
+  return /(?:^|\s)(нет|точнее|вернее|вместо|не надо|я имел в виду|no|actually|rather|instead|i mean)(?:\s|$)/.test(normalize(text))
+}
+
 export function translitToCyrillic(s: string): string {
   let out = normalize(s)
   for (const [re, to] of TRANSLIT) out = out.replace(re, to)

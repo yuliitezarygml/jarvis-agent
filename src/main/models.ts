@@ -1,13 +1,16 @@
-import { createWriteStream, existsSync, mkdirSync, rmSync, readdirSync, renameSync, statSync } from 'fs'
+import { createWriteStream, existsSync, mkdirSync, rmSync, readdirSync, readFileSync, renameSync, statSync } from 'fs'
 import { join, dirname } from 'path'
 import { spawn } from 'child_process'
 import { Readable } from 'stream'
 import { pipeline } from 'stream/promises'
 import { net } from 'electron'
 import type { ModelAsset, SetupProgress } from '../shared/types'
+import { isLegacyPiperConfig } from '../shared/piper-config'
 
 const GH = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models'
-const HF_PIPER = 'https://huggingface.co/rhasspy/piper-voices/resolve/main'
+// Keep model and config from one revision compatible with the bundled 2023.11.14 Piper CLI.
+// Upstream main retrained Denis for Piper 1.5 (multi-codepoint phonemes), which the CLI cannot load.
+const HF_PIPER = 'https://huggingface.co/rhasspy/piper-voices/resolve/a60bfb1358818a92675b3a2d9d48fb8ea47035c1'
 const HF_JARVIS = 'https://huggingface.co/jgkawell/jarvis/resolve/main/en/en_GB/jarvis'
 
 interface Def {
@@ -19,6 +22,7 @@ interface Def {
   note?: string
   /** folder (relative to models dir) that must exist to count as installed */
   check: string
+  piperConfig?: string
   files?: { url: string; dest: string }[]
   archive?: { url: string; type: 'tar' | 'zip'; into: string; stripTop?: boolean }
 }
@@ -33,6 +37,7 @@ const piper = (lang: string, region: string, speaker: string, quality: string, s
     sizeMB,
     required: false,
     check: `tts/voices/${id}.onnx`,
+    piperConfig: `tts/voices/${id}.onnx.json`,
     files: [
       { url: `${base}.onnx`, dest: `tts/voices/${id}.onnx` },
       { url: `${base}.onnx.json`, dest: `tts/voices/${id}.onnx.json` }
@@ -62,10 +67,10 @@ export const CATALOG: Def[] = [
   },
   {
     id: 'whisper-base',
-    name: 'Whisper base (fallback English)',
+    name: 'Whisper base (RU / RO / EN auto detection)',
     kind: 'stt',
     sizeMB: 198,
-    required: false,
+    required: true,
     check: 'stt/sherpa-onnx-whisper-base',
     archive: { url: `${GH}/sherpa-onnx-whisper-base.tar.bz2`, type: 'tar', into: 'stt' }
   },
@@ -124,6 +129,7 @@ export const CATALOG: Def[] = [
     required: true,
     note: 'Community Piper model emulating the film voice',
     check: 'tts/voices/jarvis-high.onnx',
+    piperConfig: 'tts/voices/jarvis-high.onnx.json',
     files: [
       { url: `${HF_JARVIS}/high/jarvis-high.onnx`, dest: 'tts/voices/jarvis-high.onnx' },
       { url: `${HF_JARVIS}/high/jarvis-high.onnx.json`, dest: 'tts/voices/jarvis-high.onnx.json' }
@@ -136,6 +142,7 @@ export const CATALOG: Def[] = [
     sizeMB: 62,
     required: false,
     check: 'tts/voices/jarvis-medium.onnx',
+    piperConfig: 'tts/voices/jarvis-medium.onnx.json',
     files: [
       { url: `${HF_JARVIS}/medium/jarvis-medium.onnx`, dest: 'tts/voices/jarvis-medium.onnx' },
       { url: `${HF_JARVIS}/medium/jarvis-medium.onnx.json`, dest: 'tts/voices/jarvis-medium.onnx.json' }
@@ -144,7 +151,8 @@ export const CATALOG: Def[] = [
   { ...piper('ru', 'RU', 'denis', 'medium', 63, 'Русский — Денис (deep male)'), required: true },
   piper('ru', 'RU', 'dmitri', 'medium', 63, 'Русский — Дмитрий'),
   piper('ru', 'RU', 'ruslan', 'medium', 63, 'Русский — Руслан'),
-  piper('ru', 'RU', 'irina', 'medium', 63, 'Русский — Ирина')
+  piper('ru', 'RU', 'irina', 'medium', 63, 'Русский — Ирина'),
+  { ...piper('ro', 'RO', 'mihai', 'medium', 63, 'Română — Mihai'), required: true }
 ]
 
 export function modelsDir(base: string) {
@@ -152,7 +160,6 @@ export function modelsDir(base: string) {
 }
 
 export function listAssets(base: string): ModelAsset[] {
-  const dir = modelsDir(base)
   return CATALOG.map((d) => ({
     id: d.id,
     name: d.name,
@@ -160,8 +167,19 @@ export function listAssets(base: string): ModelAsset[] {
     sizeMB: d.sizeMB,
     required: d.required,
     note: d.note,
-    installed: existsSync(join(dir, d.check))
+    installed: assetInstalled(base, d)
   }))
+}
+
+function assetInstalled(base: string, def: Def): boolean {
+  const dir = modelsDir(base)
+  if (!existsSync(join(dir, def.check))) return false
+  if (!def.piperConfig) return true
+  try {
+    return isLegacyPiperConfig(JSON.parse(readFileSync(join(dir, def.piperConfig), 'utf8')))
+  } catch {
+    return false
+  }
 }
 
 async function download(url: string, dest: string, onProgress: (received: number, total: number) => void) {
@@ -218,6 +236,7 @@ export async function installAsset(base: string, id: string, onProgress: (p: Set
       await extract(tmp, join(dir, def.archive.into))
       rmSync(tmp, { force: true })
     }
+    if (!assetInstalled(base, def)) throw new Error(`Downloaded asset ${id} is incomplete or incompatible with the bundled engine`)
     onProgress({ id, phase: 'done', received: 1, total: 1 })
   } catch (e: any) {
     onProgress({ id, phase: 'error', received: 0, total: 0, error: String(e?.message || e) })

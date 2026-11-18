@@ -7,6 +7,7 @@
 //   parent → child  {type:'init', cfg}  |  {type:'job', id, samples, commandMode, gateHit, partial, aliases, sensitivity, language, wakeEnabled}
 //   child  → parent {type:'ready'}      |  {type:'event', id, event}  |  {type:'done', id, produced}
 import { stripWake, looseWakeGate, wakeThreshold, findWake } from '../../shared/textmatch'
+import { detectLanguage, isLang, romanianDiacritics } from '../../shared/language'
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const sherpa = require('sherpa-onnx-node')
@@ -50,12 +51,10 @@ function getWhisper(): any {
   if (!whisper) {
     const dir = cfg.whisperDir
     const kind = cfg.whisperKind
-    // With the Russian recogniser present Whisper only ever hears English: force it (no language-ID mistakes, faster).
-    const lang = cfg.gigaDir ? 'en' : cfg.language
     whisper = new sherpa.OfflineRecognizer({
       featConfig: { sampleRate: SR, featureDim: 80 },
       modelConfig: {
-        whisper: { encoder: `${dir}/${kind}-encoder.int8.onnx`, decoder: `${dir}/${kind}-decoder.int8.onnx`, language: lang, task: 'transcribe', tailPaddings: 800 },
+        whisper: { encoder: `${dir}/${kind}-encoder.int8.onnx`, decoder: `${dir}/${kind}-decoder.int8.onnx`, language: cfg.language, task: 'transcribe', tailPaddings: 800 },
         tokens: `${dir}/${kind}-tokens.txt`,
         numThreads: cfg.threads,
         provider: 'cpu',
@@ -103,25 +102,26 @@ const gigaText = (x: Float32Array) => {
   return g ? decode(g, x) : ''
 }
 
-/** English recogniser: Parakeet-TDT (fast, light, punctuated) when installed, otherwise Whisper. */
+/** Multilingual decoding is also the language detector; Parakeet alone cannot distinguish Romanian from English. */
 function whisperText(x: Float32Array): { text: string; lang: string } {
-  if (cfg.parakeetDir) return { text: decode(getParakeet(), x), lang: 'en' }
   const w = getWhisper()
   const st = w.createStream()
   st.acceptWaveform({ sampleRate: SR, samples: x })
   w.decode(st)
   const r = w.getResult(st)
-  return { text: (r.text || '').trim(), lang: String(r.lang || '').replace(/[<|>]/g, '') }
+  const text = romanianDiacritics((r.text || '').trim())
+  const detected = String(r.lang || '').replace(/[<|>]/g, '')
+  return { text, lang: isLang(detected) ? detected : detectLanguage(text) }
 }
 
-/** Russian recogniser first (fast, excellent); non-Russian output means English → Whisper. Settings can pin a language. */
+/** Pinning RU/EN keeps the fast specialised path. Auto must identify all three languages before choosing it. */
 function transcribe(x: Float32Array, language: string): { text: string; lang: string } {
-  if (language !== 'en' && cfg.gigaDir) {
-    const g = gigaText(x)
-    if (language === 'ru' || mostlyRussian(g)) return { text: g, lang: 'ru' }
-  }
+  if (language === 'ru' && cfg.gigaDir) return { text: gigaText(x), lang: 'ru' }
+  if (language === 'en' && cfg.parakeetDir) return { text: decode(getParakeet(), x), lang: 'en' }
   const w = whisperText(x)
-  return { text: w.text, lang: w.lang === 'ru' ? 'ru' : 'en' }
+  if (w.lang === 'ru' && cfg.gigaDir) return { text: gigaText(x) || w.text, lang: 'ru' }
+  if (w.lang === 'en' && cfg.parakeetDir) return { text: decode(getParakeet(), x) || w.text, lang: 'en' }
+  return w
 }
 
 interface Job {
@@ -160,7 +160,7 @@ function runJob(m: Job) {
       // Stage 1: Russian recogniser on every short utterance — finds the wake word even if the cheap gate misheard it.
       let verified = false
       let gigaLatin = ''
-      if (m.language !== 'en' && cfg.gigaDir) {
+      if (m.language !== 'en' && m.language !== 'ro' && cfg.gigaDir) {
         const g = gigaText(x)
         gigaLatin = g
         emit({ type: 'debug', giga: g, partial: m.partial })
@@ -169,27 +169,36 @@ function runJob(m: Job) {
           // two independent recognisers vouching for the name is stronger than one: if the streaming gate heard it
           // clearly, accept it even when the big model wrote it badly ("Джарс"), and drop the mangled first word.
           const gateHeard = !r.hit && m.gateHit ? findWake(m.partial, m.aliases, m.sensitivity, 3, wakeThreshold(m.sensitivity) - 0.1) : null
-          if (!r.hit && !gateHeard) {
+          if (!r.hit && !gateHeard && !m.gateHit) {
             // Russian speech without the wake word: just conversation in the room — ignore.
             if (m.gateHit) emit({ type: 'wakeRejected', text: g })
             return
           }
-          verified = true
-          raw = g
-          command = r.hit ? r.command : g.split(/\s+/).slice(Math.min(gateHeard!.consumed, 2)).join(' ').replace(/^[,.:;!?\s-]+/, '')
-          lang = 'ru'
+          if (r.hit || gateHeard) {
+            const tr = m.language === 'ru' ? { text: g, lang: 'ru' } : transcribe(x, m.language)
+            raw = tr.text
+            lang = tr.lang
+            const multilingual = stripWake(raw, m.aliases, m.sensitivity, relaxed)
+            // Do not execute a foreign-language fragment just because RU ASR hallucinated the name.
+            if (multilingual.hit) { command = multilingual.command; verified = true }
+            else if (lang === 'ru' && gateHeard) {
+              raw = g
+              command = g.split(/\s+/).slice(Math.min(gateHeard.consumed, 2)).join(' ').replace(/^[,.:;!?\s-]+/, '')
+              verified = true
+            }
+          }
         }
       }
-      // Stage 2: not Russian → English (or unclear). Whisper only if the gate thinks it heard the wake word.
+      // Stage 2: multilingual verification only for a candidate wake phrase, not ambient room speech.
       if (!verified) {
         if (m.language === 'ru') return
         // run the (heavier) English recogniser only when something resembling the name was heard by either model
         const maybeName = m.gateHit || looseWakeGate(m.partial, m.aliases) || (m.language !== 'ru' && looseWakeGate(gigaLatin, m.aliases))
         if (!maybeName) return
         emit({ type: 'busy', on: true })
-        const w = whisperText(x)
-        raw = w.text || m.partial
-        lang = w.lang === 'ru' ? 'ru' : 'en'
+        const w = transcribe(x, m.language)
+        raw = w.text
+        lang = w.lang
         const r = stripWake(raw, m.aliases, m.sensitivity, relaxed)
         if (!r.hit) {
           emit({ type: 'wakeRejected', text: raw })

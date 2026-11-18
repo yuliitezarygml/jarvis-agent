@@ -33,6 +33,7 @@ let aliases: string[] = []
 let wakeEnabled = true
 
 let mode: Mode = 'wake'
+let generation = 0
 let modeTimer: NodeJS.Timeout | null = null
 let ring: Float32Array[] = []
 let ringLen = 0
@@ -50,7 +51,7 @@ let quietRun = 0
 let speechChunks = 0
 const CHUNK_MS = (512 / SR) * 1000
 
-const send = (m: any, transfer?: any[]) => parentPort!.postMessage(m, transfer as any)
+const send = (m: any, transfer?: any[]) => parentPort!.postMessage({ ...m, generation }, transfer as any)
 
 function pushRing(chunk: Float32Array) {
   ring.push(chunk)
@@ -167,7 +168,7 @@ function endUtterance(segment?: Float32Array, reason = 'vad') {
   send({ type: 'speech', on: false, reason, ms: Math.round((uttLenAtEnd / SR) * 1000), peak: Number(peak.toFixed(3)) })
 
   const commandMode = mode === 'command'
-  if (!commandMode && (!wakeEnabled || samples.length > SR * 12)) return
+  if (!commandMode && (!wakeEnabled || (!gateHit && samples.length > SR * 12))) return
   if (Date.now() < ignoreUntil) return
   send({ type: 'job', samples, commandMode, gateHit, partial }, [samples.buffer])
 }
@@ -220,7 +221,7 @@ function onAudio(samples: Float32Array) {
       const uttMs = speechChunks * CHUNK_MS
       const endMs = mode === 'command' ? Math.min(1500, 650 + uttMs * 0.07) : Math.min(1000, 750 + uttMs * 0.05)
       const longEnough = uttMs > 600
-      const cap = mode === 'command' ? 70_000 : 12_000
+      const cap = mode === 'command' || wakeHit ? 70_000 : 12_000
       if ((quietRun * CHUNK_MS >= endMs && longEnough) || uttLen > (cap / 1000) * SR) {
         forceEnd()
         continue
@@ -237,7 +238,22 @@ function onAudio(samples: Float32Array) {
 parentPort!.on('message', (m: any) => {
   switch (m.type) {
     case 'init':
+      generation = m.generation
       init(m)
+      break
+    case 'reset':
+      generation = m.generation
+      inSpeech = false
+      stream = null
+      utt = []
+      uttLen = 0
+      ring = []
+      ringLen = 0
+      frameBuf = new Float32Array(0)
+      wakeHit = false
+      lastPartial = ''
+      try { vad?.reset() } catch {}
+      setMode(m.mode === 'command' ? 'command' : 'wake')
       break
     case 'audio':
       onAudio(m.samples)

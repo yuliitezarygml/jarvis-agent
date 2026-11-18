@@ -1,4 +1,4 @@
-export type Lang = 'ru' | 'en'
+export type Lang = 'ru' | 'ro' | 'en'
 export type AssistantState = 'idle' | 'wake' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'error'
 
 export interface Settings {
@@ -8,12 +8,14 @@ export interface Settings {
   wakeEnabled: boolean
   wakeSensitivity: number // 0..1, fuzzy threshold strictness
   interfaceLang: Lang | 'auto'
+  lastInputLanguage: Lang | ''
   micDeviceId: string
   sttModel: 'parakeet-en' | 'whisper-base' | 'whisper-small' | 'whisper-turbo'
   sttLanguage: 'auto' | Lang
   voiceEnabled: boolean
   voiceRu: string
   voiceEn: string
+  voiceRo: string
   voiceSpeed: number
   voiceVolume: number
   voiceFx: boolean
@@ -27,6 +29,9 @@ export interface Settings {
   hudCorner: 'br' | 'bl' | 'tr' | 'tl'
   cwd: string
   followupSeconds: number
+  /** Quiet time before a complete voice command is submitted; unfinished phrases wait longer. */
+  commandPauseSeconds: number
+  conversationIdleSeconds: number
   autoNewThreadMinutes: number
   /** unload the agent server after this many idle minutes (0 = keep it running) */
   agentIdleMinutes: number
@@ -65,12 +70,14 @@ export const DEFAULT_SETTINGS: Settings = {
   wakeEnabled: true,
   wakeSensitivity: 0.6,
   interfaceLang: 'auto',
+  lastInputLanguage: '',
   micDeviceId: 'default',
   sttModel: 'parakeet-en',
   sttLanguage: 'auto',
   voiceEnabled: true,
   voiceRu: 'fish:ru',
   voiceEn: 'fish:en',
+  voiceRo: 'ro_RO-mihai-medium',
   voiceSpeed: 1,
   voiceVolume: 0.9,
   voiceFx: true,
@@ -84,6 +91,8 @@ export const DEFAULT_SETTINGS: Settings = {
   hudCorner: 'br',
   cwd: '',
   followupSeconds: 7,
+  commandPauseSeconds: 3.5,
+  conversationIdleSeconds: 120,
   autoNewThreadMinutes: 45,
   agentIdleMinutes: 10,
   freeBlocked: {},
@@ -263,10 +272,13 @@ export interface SetupProgress {
 
 export interface AppStatus {
   state: AssistantState
+  language?: Lang
   opencode: 'starting' | 'ready' | 'error' | 'stopped' | 'sleeping'
   speech: 'loading' | 'ready' | 'error' | 'missing-models'
   tts: 'ready' | 'missing-voice' | 'error'
   listeningForWake: boolean
+  voiceDraft?: { text: string; waiting: boolean }
+  conversation?: boolean
   message?: string
   activity?: string
   /** the last steps of the running task (newest last) and when the task started */
@@ -292,6 +304,7 @@ export const IPC = {
   chatHistory: 'chat:history',
   sendText: 'chat:send',
   abort: 'chat:abort',
+  conversationEnd: 'conversation:end',
   models: 'models:list',
   modelAssets: 'assets:list',
   modelDownload: 'assets:download',

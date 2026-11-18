@@ -2,6 +2,8 @@
  * Instant commands that need no language model: volume, media keys, desktop. Matched on the normalised phrase, executed
  * with the native helper and answered with a short spoken confirmation — "louder" takes ~300 ms instead of an agent turn.
  */
+import { hasSpokenCorrection } from '../shared/textmatch'
+
 export interface FastAction {
   kind: 'volume' | 'media' | 'desktop'
   action: string
@@ -34,7 +36,7 @@ function level(s: string): number | null {
 
 export function matchFast(raw: string): FastAction | null {
   const t = N(raw)
-  if (!t || t.length > 60) return null
+  if (!t || t.length > 60 || hasSpokenCorrection(t)) return null
   const strip = t.replace(/^(джарвис |jarvis |пожалуйста |please |сделай |make it |can you |could you |ты можешь |можешь )+/, '').replace(/ (пожалуйста|please|сэр|sir)$/, '')
 
   // ---- absolute volume: "громкость 40", "volume to 40 percent", "сделай звук на тридцать процентов"

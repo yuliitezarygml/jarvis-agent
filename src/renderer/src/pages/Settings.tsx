@@ -321,6 +321,12 @@ export function SettingsPage() {
                   <Row label={t('settings.listenWindow')} hint={t('settings.listenWindowHint')}>
                     <Slider value={s.followupSeconds} min={3} max={15} step={1} onChange={(v) => patch({ followupSeconds: v })} />
                   </Row>
+                  <Row label={t('settings.commandPause')} hint={t('settings.commandPauseHint')}>
+                    <Slider value={s.commandPauseSeconds} min={1} max={10} step={0.5} onChange={(v) => patch({ commandPauseSeconds: v })} />
+                  </Row>
+                  <Row label={t('settings.conversationIdle')} hint={t('settings.conversationIdleHint')}>
+                    <Slider value={s.conversationIdleSeconds} min={30} max={600} step={30} onChange={(v) => patch({ conversationIdleSeconds: v })} />
+                  </Row>
                 </Group>
                 <Group title={t('sg.recognition')}>
                   <Row label={t('settings.mic')}>
