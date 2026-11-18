@@ -23,7 +23,7 @@ f51dfc56e3ceb35e69b4caf5cd64595312ad29590af00ea6d703bd41d77d40ac
 ```bash
 systemctl status jarvis-tts --no-pager
 journalctl -u jarvis-tts -n 40 --no-pager
-curl --fail http://192.168.50.38:8080/api/health
+/opt/jarvis-tts/venv/bin/python -c 'import urllib.request; print(urllib.request.urlopen("http://192.168.50.38:8080/api/health").read().decode())'
 systemctl restart jarvis-tts
 ```
 
