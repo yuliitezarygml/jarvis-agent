@@ -50,7 +50,6 @@ export function DiagnosticsPanel() {
 
   return (
     <section className="sgroup">
-      <header><h4>{t('diag.title')}</h4><p>{t('diag.hint')}</p></header>
       <div className="sbody glass">
         {row(t('diag.microphone'), badge(t('diag.mic.' + (data?.microphone.state ?? 'unknown')), data?.microphone.state === 'ready' ? true : data?.microphone.state === 'error' ? false : undefined), data?.microphone.error)}
         {row(t('diag.speech'), badge(t('diag.speech.' + (data?.speech.state ?? 'loading')), data?.speech.state === 'ready' ? true : data?.speech.state === 'error' || data?.speech.state === 'missing-models' ? false : undefined), data?.speech.missingModels.length ? t('diag.missing') + ': ' + data.speech.missingModels.join(', ') : undefined)}
