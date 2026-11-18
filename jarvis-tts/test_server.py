@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from server import Engine, SpeechRequest, acute_stress, create_app
+from server import Engine, SpeechRequest, acute_stress, create_app, normalize_anglicisms
 
 
 class FakeEngine:
@@ -46,10 +46,33 @@ class VoiceApiTests(unittest.TestCase):
     def test_russian_stress_is_converted_without_losing_letters_or_punctuation(self):
         self.assertEqual(acute_stress('С+эр, +я гот+ов. Ёлка и ещ+ё!'), 'Сэ́р, я́ гото́в. Ёлка и ещё́!')
 
+    def test_english_words_inside_russian_work_with_or_without_token_type_ids(self):
+        for with_types in (False, True):
+            with self.subTest(token_type_ids=with_types):
+                generated = []
+                class Tensor:
+                    def to(self, device): return self
+                    def tolist(self): return [1, 2]
+                class Tokenizer:
+                    def __call__(self, text, **kwargs):
+                        self_test.assertEqual(text, '<pad><pad><pad>Jarvis')
+                        fields = {'input_ids': Tensor(), 'attention_mask': Tensor()}
+                        if with_types: fields['token_type_ids'] = Tensor()
+                        return fields
+                    def decode(self, ids): return '<pad><s>джарвис</s>'
+                def generate(**kwargs):
+                    generated.append(kwargs)
+                    return [Tensor()]
+                self_test = self
+                normalizer = SimpleNamespace(angl_tokenizer=Tokenizer(), angl_model=SimpleNamespace(device='cpu', generate=generate), kirillizator=lambda text: text)
+                self.assertEqual(normalize_anglicisms(normalizer, 'Jarvis'), 'джарвис')
+                self.assertNotIn('token_type_ids', generated[0])
+                self.assertIn('attention_mask', generated[0])
+
     def test_rejects_unsupported_or_invalid_input_without_running_model(self):
         requests = [
             {'text': ''}, {'text': ' '}, {'text': 'т' * 2001},
-            {'text': 'Hello', 'lang': 'en'}, {'text': 'Hello', 'lang': 'ru'},
+            {'text': 'Hello', 'lang': 'en'}, {'text': '... 🎵', 'lang': 'ru'},
             {'text': 'Привет', 'format': 'exe'}, {'text': 'Привет', 'speed': 0},
             {'text': 'Привет', 'speed': 'NaN'}, {'text': 'Привет', 'voice_path': '/etc/passwd'},
         ]
@@ -57,6 +80,14 @@ class VoiceApiTests(unittest.TestCase):
             with self.subTest(payload=str(payload)[:60]):
                 self.assertEqual(self.client.post('/api/tts', json=payload).status_code, 422)
         self.assertEqual(self.engine.calls, 0)
+
+    def test_russian_voice_accepts_numbers_and_latin_names_without_cyrillic_padding(self):
+        for text in ['25', '3.14', 'CPU', 'Windows', 'Jarvis', 'OK', 'Good morning, sir.']:
+            with self.subTest(text=text):
+                response = self.client.post('/api/tts', json={'text': text, 'lang': 'ru'})
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.content[:4], b'RIFF')
+        self.assertEqual(self.engine.calls, 7)
 
     def test_not_ready_never_claims_health_or_runs_inference(self):
         self.engine.ready = False

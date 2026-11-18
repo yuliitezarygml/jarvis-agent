@@ -13,7 +13,7 @@ import { Opencode } from './opencode'
 import { JarvisMcp, Hub } from './mcp'
 import { WinBridge, hasNative } from './win'
 import { SpeechEngine, SpeechEvent } from './speech/engine'
-import { Tts, splitSentences, detectLang, speakable } from './tts'
+import { Tts, splitSentences, speakable } from './tts'
 import { Overlay } from './overlay'
 import { XttsSidecar } from './xtts'
 import { buildSystemExtra } from './agent-prompt'
@@ -240,7 +240,7 @@ export class Assistant extends EventEmitter implements Hub {
 
   prewarmVoices() {
     const s = this.settings()
-    for (const v of [s.voiceRu, s.voiceEn]) this.tts.warm(v)
+    this.tts.warm(s.voiceRu)
     void this.prepareAcks()
     if (!s.voiceRu.startsWith('xtts:') && !s.voiceEn.startsWith('xtts:') && this.xtts.state !== 'off') this.xtts.stop()
   }
@@ -289,12 +289,7 @@ export class Assistant extends EventEmitter implements Hub {
   }
 
   private voiceFor(lang: Lang) {
-    const s = this.settings()
-    return lang === 'en' ? s.voiceEn : s.voiceRu
-  }
-
-  private fallbackVoice(lang: Lang) {
-    return lang === 'en' ? 'jarvis-high' : 'ru_RU-denis-medium'
+    return this.settings().voiceRu
   }
 
   // ---------------------------------------------------------------- speech events
@@ -429,11 +424,10 @@ export class Assistant extends EventEmitter implements Hub {
     this.ackPreparing = true
     try {
       const s = this.settings()
-      for (const lang of ['en', 'ru', 'ro'] as const) {
+      for (const lang of ['ru'] as const) {
         const voice = this.voiceFor(lang)
         if (!this.tts.available(voice)) continue
         if (voice.startsWith('xtts:') && this.xtts.state !== 'ready') continue
-        if (lang === 'ru' && (voice.startsWith('xtts:') || voice.startsWith('fish:')) && this.realAckClips().length) continue // real clips are used instead
         for (const line of Assistant.ACK[lang]) {
           const key = voiceCacheKey(s, voice, line)
           if (this.ackCache.has(key)) continue
@@ -462,12 +456,12 @@ export class Assistant extends EventEmitter implements Hub {
     const epoch = this.sayEpoch
     const s = this.settings()
     if (s.wakeAck === 'off' || !s.voiceEnabled || this.speakingDepth > 0) return
-    const lang: Lang = isLang(langHint) ? langHint : this.lastLang
+    const lang: Lang = 'ru'
     const voice = this.voiceFor(lang)
     let wav: Buffer | undefined
     let label = ''
     try {
-      const real = lang === 'ru' && (voice.startsWith('xtts:') || voice.startsWith('fish:')) ? this.realAckClips() : []
+      const real = lang === 'ru' && voice.startsWith('xtts:') ? this.realAckClips() : []
       if (real.length) {
         const pool = real.filter((r) => r.text !== this.lastAck)
         const pick = pool[Math.floor(Math.random() * pool.length)] ?? real[0]
@@ -478,9 +472,7 @@ export class Assistant extends EventEmitter implements Hub {
         const line = lines[Math.floor(Math.random() * lines.length)]
         wav = this.ackCache.get(voiceCacheKey(s, voice, line))
         if (!wav) {
-          // not pre-built yet (cloned voice still loading): use the fast Piper voice rather than make the user wait
-          const fb = this.fallbackVoice(lang)
-          if (this.tts.available(fb)) wav = await Promise.race([this.tts.synth(line, fb, s.voiceSpeed, lang), new Promise<undefined>((r) => setTimeout(r, 2500))])
+          wav = await this.tts.synth(line, voice, s.voiceSpeed, lang)
         }
         label = line
       }
@@ -817,9 +809,8 @@ export class Assistant extends EventEmitter implements Hub {
     this.emit('subtitle', clean)
     if (highlights.length) void this.overlay.show(highlights)
 
-    const lang = detectLang(clean, this.lastLang)
-    let voice = this.voiceFor(lang)
-    if (!this.tts.available(voice)) voice = this.fallbackVoice(lang)
+    const lang: Lang = 'ru'
+    const voice = this.voiceFor(lang)
     const ok = s.voiceEnabled && this.tts.available(voice)
     this.speakAbort = { aborted: false }
     const token = this.speakAbort
@@ -828,29 +819,16 @@ export class Assistant extends EventEmitter implements Hub {
     this.setState('speaking')
     try {
       if (!ok) {
+        if (s.voiceEnabled) throw new Error('Выбранный голос недоступен')
         await new Promise((r) => setTimeout(r, Math.min(6000, 700 + clean.length * 55)))
       } else {
         const sentences = splitSentences(clean)
-        // a cloned voice that is still loading or failing must not leave Jarvis mute: fall back to Piper
+        // Keep the selected timbre. A failed voice must never silently become a different speaker.
         const synth = async (t: string) => {
-          // cloned voice not loaded (it unloads when idle / is still starting): kick it off and answer with Piper now
           if (voice.startsWith('xtts:') && this.xtts.state !== 'ready') {
-            void this.xtts.ensure().catch(() => {})
-            const fb0 = this.fallbackVoice(lang)
-            if (this.tts.available(fb0)) return this.tts.synth(t, fb0, s.voiceSpeed, lang)
+            await this.xtts.ensure()
           }
-          try {
-            return await this.tts.synth(t, voice, s.voiceSpeed, lang)
-          } catch (e) {
-            if (!voice.startsWith('xtts:') && !voice.startsWith('fish:')) throw e
-            console.warn('[tts] remote voice failed, falling back to Piper:', (e as Error).message)
-            if (voice.startsWith('fish:') && !this.fishWarned) {
-              this.fishWarned = true
-              this.emit('chat', { id: uid(), kind: 'system', text: '⚠ ' + (e as Error).message + ' — using the local voice', at: Date.now() } satisfies ChatItem)
-            }
-            const fb = this.fallbackVoice(lang)
-            return this.tts.synth(t, fb, s.voiceSpeed, lang)
-          }
+          return this.tts.synth(t, voice, s.voiceSpeed, lang)
         }
         let next = synth(sentences[0])
         void next.catch(() => {}) // a prefetched sentence can be abandoned by an interruption
@@ -863,7 +841,7 @@ export class Assistant extends EventEmitter implements Hub {
           }
           this.speech.speaking(true, sentences[i])
           const completed = await Promise.race([
-            this.play({ id: uid(), wav, fx: s.voiceFx && lang === 'en' ? true : s.voiceFx, volume: s.voiceVolume }),
+            this.play({ id: uid(), wav, fx: s.voiceFx, volume: s.voiceVolume }),
             new Promise((r) => setTimeout(r, wavMillis(wav) + 5000)) // audio host never reported back
           ])
           if (completed === true && !token.aborted) this.spokenSentences.push(sentences[i])
@@ -872,6 +850,7 @@ export class Assistant extends EventEmitter implements Hub {
       }
     } catch (e) {
       console.error('[tts] failed', e)
+      if (!token.aborted) this.emit('chat', { id: uid(), kind: 'system', text: '⚠ Не удалось озвучить ответ выбранным голосом. ' + (e as Error).message, at: Date.now() } satisfies ChatItem)
     } finally {
       if (epoch !== this.sayEpoch) return
       this.speakingDepth = Math.max(0, this.speakingDepth - 1)

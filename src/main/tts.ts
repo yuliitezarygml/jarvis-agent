@@ -6,7 +6,7 @@ import type { XttsSidecar } from './xtts'
 import { fishSynth, serverSynth, type FishConfig } from './fish'
 import { resourcePath } from './paths'
 import type { Lang } from '../shared/types'
-import { detectLanguage, romanianDiacritics } from '../shared/language'
+import { detectLanguage } from '../shared/language'
 
 /** Piper needs the VC++ runtime; the app ships it in resources/native/vcrt for PCs without the redistributable. */
 function piperEnv() {
@@ -122,8 +122,6 @@ export class Tts extends EventEmitter {
   /** Synthesise one sentence → returns audio bytes (wav, or mp3 from the free server). */
   async synth(text: string, voiceId: string, speed = 1, lang: Lang = 'ru'): Promise<Buffer> {
     if (lang === 'ro') {
-      text = romanianDiacritics(text)
-      // The shared Fish server and the custom RU/EN clone do not promise Romanian support.
       throw new Error('Romanian speech has been removed from this version')
     }
     if (voiceId.startsWith('fish:')) {

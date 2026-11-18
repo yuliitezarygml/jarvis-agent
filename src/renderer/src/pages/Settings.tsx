@@ -1,6 +1,7 @@
 import { ReactNode, useEffect, useState } from 'react'
 import { Bot, Plug, Download, Eye, Info, Mic, SlidersHorizontal, Cpu, Volume2, X, Check } from 'lucide-react'
 import type { Settings, UpdateState } from '@shared/types'
+import { DEFAULT_SETTINGS } from '@shared/types'
 import { api, IPC } from '../api'
 import { useApp, useT } from '../store'
 import { ProviderPanel, openUrl } from '../components/ProviderPanel'
@@ -160,7 +161,6 @@ export function SettingsPage() {
 
   const voices = assets.filter((a) => a.kind === 'tts' && a.id !== 'piper-runtime' && a.installed)
   const ruVoices = voices.filter((v) => v.id.startsWith('ru_') || v.id.includes('-ru'))
-  const enVoices = voices.filter((v) => v.id.startsWith('jarvis'))
   const preview = (voice: string, text: string) => api.invoke('voice:preview', text, voice)
 
   const modelList = models.length ? models : []
@@ -415,9 +415,6 @@ export function SettingsPage() {
                     <Row label={t('settings.fishRu')}>
                       <input className="input" defaultValue={s.fishVoiceRu} placeholder="reference_id" onBlur={(e) => patch({ fishVoiceRu: e.target.value.trim() })} />
                     </Row>
-                    <Row label={t('settings.fishEn')}>
-                      <input className="input" defaultValue={s.fishVoiceEn} placeholder="reference_id" onBlur={(e) => patch({ fishVoiceEn: e.target.value.trim() })} />
-                    </Row>
                   </Group>
                 )}
 
@@ -440,23 +437,6 @@ export function SettingsPage() {
                         {t('settings.preview')}
                       </button>
                     </Row>
-                    <Row label={t('settings.voiceEn')}>
-                      <select className="select" value={s.voiceEn} onChange={(e) => patch({ voiceEn: e.target.value })}>
-                        {extra.filter((v) => v.lang !== 'ru' && !v.id.startsWith('fish')).map((v) => (
-                          <option key={v.id} value={v.id}>
-                            {v.name}
-                          </option>
-                        ))}
-                        {enVoices.map((v) => (
-                          <option key={v.id} value={v.id}>
-                            {v.name}
-                          </option>
-                        ))}
-                      </select>
-                      <button className="btn sm" onClick={() => preview(s.voiceEn, 'Good evening, sir. All systems are running at full capacity.')}>
-                        {t('settings.preview')}
-                      </button>
-                    </Row>
                   </Group>
                 ) : (
                   <Group title={t('sg.voices')}>
@@ -473,7 +453,7 @@ export function SettingsPage() {
                     <summary>{t('voice.advanced')}</summary>
                     <Group>
                       <Row label={t('voice.serverUrl')}>
-                        <input className="input" defaultValue={s.ttsServerUrl} onBlur={(e) => patch({ ttsServerUrl: e.target.value.trim() || 'https://jarvis-tts-jade.vercel.app' })} />
+                        <input className="input" defaultValue={s.ttsServerUrl} onBlur={(e) => patch({ ttsServerUrl: e.target.value.trim() || DEFAULT_SETTINGS.ttsServerUrl })} />
                       </Row>
                     </Group>
                   </details>

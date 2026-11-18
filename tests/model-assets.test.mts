@@ -38,6 +38,13 @@ test('an existing voice is reinstalled when its config is missing, corrupt or in
   }
 })
 
+test('Russian build cannot reinstall the removed Romanian voice or require English models', () => {
+  assert.equal(CATALOG.some((asset) => asset.id.startsWith('ro_')), false)
+  assert.equal(CATALOG.find((asset) => asset.id === 'parakeet-en')?.required, false)
+  assert.equal(CATALOG.find((asset) => asset.id === 'jarvis-high')?.required, false)
+  assert.equal(CATALOG.find((asset) => asset.id === 'gigaam-ru')?.required, true)
+})
+
 test('voice isolation is unavailable until both pinned model files pass checksum verification', () => {
   const prefix = join(tmpdir(), 'jarvis-focus-assets-')
   const root = mkdtempSync(prefix)

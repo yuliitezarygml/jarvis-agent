@@ -71,7 +71,7 @@ export async function fishSynth(cfg: FishConfig, text: string, lang: 'ru' | 'en'
 }
 
 /**
- * The free shared voice server (jarvis-tts): it holds a pool of Fish Audio keys, so users need no account.
+ * The configured voice server. The current installation uses its own Russian clone on the LAN.
  * Uses Chromium's network stack (net.fetch), which honours the system proxy / VPN like the browser does.
  */
 export async function serverSynth(cfg: FishConfig, text: string, lang: 'ru' | 'en', speed = 1): Promise<Buffer> {
@@ -85,16 +85,16 @@ export async function serverSynth(cfg: FishConfig, text: string, lang: 'ru' | 'e
       signal: AbortSignal.timeout(30_000)
     })
   } catch (e: any) {
-    throw new FishError(`free voice server unreachable (${e?.message || e})`)
+    throw new FishError(`Сервер голоса недоступен (${e?.message || e})`)
   }
   if (!res.ok) {
     let msg = ''
     try {
       msg = ((await res.json()) as { error?: string }).error || ''
     } catch {}
-    throw new FishError(`free voice server: ${msg || 'HTTP ' + res.status}`, res.status)
+    throw new FishError(`Сервер голоса: ${msg || 'HTTP ' + res.status}`, res.status)
   }
   const buf = Buffer.from(await res.arrayBuffer())
-  if (buf.length < 64) throw new FishError('free voice server returned no audio')
+  if (buf.length < 64) throw new FishError('Сервер голоса вернул пустое аудио')
   return buf
 }

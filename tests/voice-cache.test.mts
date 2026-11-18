@@ -6,7 +6,7 @@ import { voiceCacheKey } from '../src/main/voice-cache.ts'
 test('switching between shared server, own server and direct Fish cannot reuse the previous voice', () => {
   const settings = { ...DEFAULT_SETTINGS, voiceMode: 'server' as const, ttsServerUrl: 'http://192.168.50.38:8080' }
   const key = voiceCacheKey(settings, 'fish:ru', 'Да, сэр?')
-  assert.notEqual(key, voiceCacheKey(DEFAULT_SETTINGS, 'fish:ru', 'Да, сэр?'))
+  assert.notEqual(key, voiceCacheKey({ ...settings, ttsServerUrl: 'https://jarvis-tts-jade.vercel.app' }, 'fish:ru', 'Да, сэр?'))
   assert.notEqual(key, voiceCacheKey({ ...settings, voiceMode: 'custom' }, 'fish:ru', 'Да, сэр?'))
   assert.equal(key, voiceCacheKey({ ...settings, ttsServerUrl: settings.ttsServerUrl + '/' }, 'fish:ru', 'Да, сэр?'))
   assert.notEqual(key, voiceCacheKey({ ...settings, voiceSpeed: 1.2 }, 'fish:ru', 'Да, сэр?'))

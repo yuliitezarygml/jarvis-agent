@@ -29,6 +29,20 @@ def acute_stress(text: str) -> str:
     return re.sub(r'\+([а-яё])', lambda match: match.group(1) + '\u0301', text, flags=re.I)
 
 
+def normalize_anglicisms(normalizer, prompt: str) -> str:
+    # RUNorm assumes every tokenizer returns token_type_ids. T5 tokenizers omit
+    # that optional field; keep the original transliteration with safe removal.
+    data = normalizer.angl_tokenizer('<pad><pad><pad>' + prompt, return_tensors='pt')
+    data.pop('token_type_ids', None)
+    data = {key: value.to(normalizer.angl_model.device) for key, value in data.items()}
+    output = normalizer.angl_model.generate(
+        **data, do_sample=False, max_new_tokens=128, repetition_penalty=1.0
+    )[0]
+    text = normalizer.angl_tokenizer.decode(output.tolist())
+    text = text.replace('<s>', '').replace('</s>', '').replace('<pad>', '').strip()
+    return normalizer.kirillizator(text)
+
+
 class SpeechRequest(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
     text: str = Field(min_length=1, max_length=2000)
@@ -59,6 +73,7 @@ class Engine:
         self.accent = load_accentor()
         self.normalizer = RUNorm()
         self.normalizer.load(model_size='small', device='cpu', workdir=str(ROOT / 'cache/runorm'))
+        self.normalizer.predict_anglicizms = normalize_anglicisms.__get__(self.normalizer)
         self.ready = True
 
     def synth(self, req: SpeechRequest, stop: threading.Event) -> tuple[bytes, bool]:
@@ -152,8 +167,10 @@ def create_app(engine=None, *, load=True) -> FastAPI:
             raise HTTPException(422, 'This server supports Russian only')
         if body.format not in ('wav', 'mp3'):
             raise HTTPException(422, 'Supported audio formats: wav, mp3')
-        if not re.search('[а-яё]', body.text, re.I):
-            raise HTTPException(422, 'Russian text is required')
+        # Russian utterances may contain a number or a Latin product name as a
+        # separate sentence. RUNorm reads these using the same Russian voice.
+        if not re.search('[а-яёa-z0-9]', body.text, re.I):
+            raise HTTPException(422, 'Текст для озвучки не содержит слов или чисел')
         try:
             await asyncio.wait_for(slot.acquire(), timeout=10)
         except TimeoutError:

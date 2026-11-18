@@ -79,7 +79,7 @@ export const ro: Record<string, string> = {
   'settings.commandPause': 'Pauză în interiorul comenzii (secunde)',
   'settings.commandPauseHint': 'Pauzele scurte păstrează aceeași comandă. O expresie neterminată așteaptă mai mult.',
   'settings.voice': 'Voce', 'settings.voiceEnabled': 'Rostește răspunsurile', 'settings.voiceRu': 'Voce rusă',
-  'settings.voiceEn': 'Voce engleză', 'settings.voiceRo': 'Voce română (locală)',
+  'settings.voiceEn': 'Voce engleză',
   'settings.cloneIdle': 'Eliberează vocea clonată după inactivitate',
   'settings.cloneIdleHint': 'Minute fără vorbire înainte de eliberarea motorului GPU (0 = păstrează încărcat).',
   'settings.fish': 'Fish Audio (voce în cloud)', 'settings.fishHint': 'Voci Jarvis în cloud. Textul rostit este trimis către Fish Audio; la erori se folosește vocea locală.',

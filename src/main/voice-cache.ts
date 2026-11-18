@@ -5,5 +5,6 @@ export function voiceCacheKey(settings: Settings, voice: string, line: string): 
   const source = settings.voiceMode === 'server'
     ? ['server', (settings.ttsServerUrl.trim() || DEFAULT_SETTINGS.ttsServerUrl).replace(/\/+$/, '')]
     : ['custom', settings.fishModel, voice === 'fish:en' ? settings.fishVoiceEn : settings.fishVoiceRu]
-  return `${voice}|${JSON.stringify([...source, settings.voiceSpeed, line])}`
+  // Do not replay files created before the selected-voice-only policy.
+  return `selected-voice-v2|${voice}|${JSON.stringify([...source, settings.voiceSpeed, line])}`
 }

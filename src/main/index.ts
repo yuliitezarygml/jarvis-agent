@@ -744,8 +744,8 @@ app.whenReady().then(async () => {
   if (process.env.JARVIS_TEST_SAY) {
     await new Promise((r) => setTimeout(r, 5000))
     const st = assistant.settings()
-    console.log('[say-test] voices:', st.voiceRu, st.voiceEn)
-    for (const line of ['Добрый вечер, сэр. Все системы работают в штатном режиме.', 'Good evening, sir. Everything is in order.']) {
+    console.log('[say-test] selected Russian voice:', st.voiceRu)
+    for (const line of ['Сэр, сервер подключён. Все системы работают.', 'Сэр, Jarvis работает на Windows. Загрузка CPU составляет 25 процентов.']) {
       const t0 = Date.now()
       await assistant.say(line)
       console.log(`[say-test] "${line.slice(0, 24)}…" done in ${Date.now() - t0}ms`)
@@ -753,7 +753,7 @@ app.whenReady().then(async () => {
   }
   if (process.env.JARVIS_TEST_ACK) {
     await new Promise((r) => setTimeout(r, 6000))
-    for (const lang of ['ru', 'ru', 'en', 'en']) {
+    for (const lang of ['ru', 'ru']) {
       const t0 = Date.now()
       await assistant.ack(lang)
       console.log(`[ack-test] ${lang} played in ${Date.now() - t0}ms`)

@@ -148,6 +148,48 @@ test('new speech is not blocked by slow synthesis of the interrupted answer', as
   assert.deepEqual(f.a.spokenSentences, ['Уточнённый ответ.'])
 })
 
+test('failed selected server voice never synthesises or plays a substitute speaker', async (t) => {
+  const f = fixture(t)
+  t.mock.method(console, 'error', () => {})
+  const voices: string[] = []
+  const notices: any[] = []
+  f.a.tts.synth = async (_text: string, voice: string) => { voices.push(voice); throw new Error('Speech synthesis failed') }
+  let played = 0
+  f.a.on('play', () => played++)
+  f.a.on('chat', (item: any) => { if (item.kind === 'system') notices.push(item) })
+  await f.a.say('Сэр, проверка выбранного голоса.')
+  assert.deepEqual(voices, [DEFAULT_SETTINGS.voiceRu])
+  assert.equal(played, 0)
+  assert.equal(notices.length, 1)
+  assert.match(notices[0].text, /выбранным голосом/)
+})
+
+test('unavailable selected voice is reported without trying Piper', async (t) => {
+  const f = fixture(t)
+  t.mock.method(console, 'error', () => {})
+  f.a.tts.available = (voice: string) => voice.startsWith('ru_')
+  let synthesis = 0
+  f.a.tts.synth = async () => { synthesis++; return wav() }
+  const notices: any[] = []
+  f.a.on('chat', (item: any) => { if (item.kind === 'system') notices.push(item) })
+  await f.a.say('Сэр, проверка недоступного голоса.')
+  assert.equal(synthesis, 0)
+  assert.match(notices[0].text, /недоступен/)
+})
+
+test('a cache-miss wake acknowledgement also keeps the selected voice on server failure', async (t) => {
+  const f = fixture(t)
+  t.mock.method(console, 'warn', () => {})
+  f.a.ackCache = new Map()
+  const voices: string[] = []
+  f.a.tts.synth = async (_text: string, voice: string) => { voices.push(voice); throw new Error('server failed') }
+  let played = 0
+  f.a.on('play', () => played++)
+  await f.a.ack('ru')
+  assert.deepEqual(voices, [DEFAULT_SETTINGS.voiceRu])
+  assert.equal(played, 0)
+})
+
 test('an interrupted routine stops before subsequent steps', async (t) => {
   const f = fixture(t)
   const first = deferred<void>()
