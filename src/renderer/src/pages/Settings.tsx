@@ -160,8 +160,6 @@ export function SettingsPage() {
   const voices = assets.filter((a) => a.kind === 'tts' && a.id !== 'piper-runtime' && a.installed)
   const ruVoices = voices.filter((v) => v.id.startsWith('ru_') || v.id.includes('-ru'))
   const enVoices = voices.filter((v) => v.id.startsWith('jarvis'))
-  const roVoices = voices.filter((v) => v.id.startsWith('ro_'))
-  const roPhrase = 'Bună ziua, domnule. Toate sistemele funcționează normal.'
   const preview = (voice: string, text: string) => api.invoke('voice:preview', text, voice)
 
   const modelList = models.length ? models : []
@@ -338,8 +336,8 @@ export function SettingsPage() {
                   <Row label={t('settings.stt')}>
                     <Seg value={s.sttModel} options={[['parakeet-en', 'Parakeet'], ['whisper-base', 'Whisper base'], ['whisper-small', 'small'], ['whisper-turbo', 'turbo']]} onChange={(v) => patch({ sttModel: v })} />
                   </Row>
-                  <Row label={t('settings.sttLang')} hint={s.sttLanguage === 'ro' ? t('settings.sttLangRoHint') : undefined}>
-                    <Seg value={s.sttLanguage} options={[['auto', 'Auto'], ['ru', 'RU'], ['en', 'EN'], ['ro', 'RO']]} onChange={(v) => patch({ sttLanguage: v })} />
+                  <Row label={t('settings.sttLang')}>
+                    <Seg value={s.sttLanguage} options={[['auto', 'Auto'], ['ru', 'RU'], ['en', 'EN']]} onChange={(v) => patch({ sttLanguage: v })} />
                   </Row>
                 </Group>
                 <Group title={t('sg.shortcut')}>
@@ -451,21 +449,6 @@ export function SettingsPage() {
                         {t('settings.preview')}
                       </button>
                     </Row>
-                    {(s.sttLanguage === 'ro' || roVoices.length > 0) && (
-                      <Row label={t('settings.voiceRo')}>
-                        <select className="select" value={s.voiceRo} onChange={(e) => patch({ voiceRo: e.target.value })}>
-                          {!roVoices.some((v) => v.id === s.voiceRo) && <option value={s.voiceRo}>{s.voiceRo} ⬇</option>}
-                          {roVoices.map((v) => (
-                            <option key={v.id} value={v.id}>
-                              {v.name}
-                            </option>
-                          ))}
-                        </select>
-                        <button className="btn sm" disabled={!roVoices.some((v) => v.id === s.voiceRo)} onClick={() => preview(s.voiceRo, roPhrase)}>
-                          {t('settings.preview')}
-                        </button>
-                      </Row>
-                    )}
                   </Group>
                 ) : (
                   <Group title={t('sg.voices')}>
@@ -476,11 +459,6 @@ export function SettingsPage() {
                       <button className="btn sm" onClick={() => preview(s.voiceEn, 'Good evening, sir. All systems are running at full capacity.')}>
                         EN · {t('settings.preview')}
                       </button>
-                      {s.sttLanguage === 'ro' && (
-                        <button className="btn sm" disabled={!roVoices.some((v) => v.id === s.voiceRo)} onClick={() => preview(s.voiceRo, roPhrase)}>
-                          RO · {t('settings.preview')}
-                        </button>
-                      )}
                     </Row>
                   </Group>
                 )}

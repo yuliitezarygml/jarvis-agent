@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { findWake, stripWake, looseWakeGate, phraseScore, normalize, fixRomanian } from '../src/shared/textmatch.ts'
+import { findWake, stripWake, looseWakeGate, phraseScore, normalize } from '../src/shared/textmatch.ts'
 import { speakable, splitSentences, detectLang } from '../src/main/tts.ts'
 
 const ALIASES = ['джарвис', 'jarvis', 'джарви', 'джави', 'жарви']
@@ -45,16 +45,4 @@ test('sentence splitting keeps short fragments together', () => {
   assert.ok(s.length >= 1 && s.every((x) => x.length >= 6))
   assert.equal(detectLang('Открой браузер'), 'ru')
   assert.equal(detectLang('Open the browser'), 'en')
-})
-
-test('Romanian: detected by letters or words, diacritics unified', () => {
-  assert.equal(detectLang('Deschide browserul, te rog.'), 'en')
-  assert.equal(detectLang('Deschide browserul, te rog.', true), 'ro')
-  assert.equal(detectLang('Am deschis fișierul, domnule.'), 'ro')
-  assert.equal(detectLang('Este gata si nu mai sunt erori'), 'ro')
-  assert.equal(detectLang('Open the file, sir', true), 'en')
-  assert.equal(detectLang('Готово, сэр', true), 'ru')
-  assert.equal(fixRomanian('Aţi făcut aşa'), 'Ați făcut așa')
-  assert.equal(normalize('Vă ascult, domnule!'), 'va ascult domnule')
-  assert.ok(phraseScore('deschide fisierul', 'Deschide fişierul') > 0.95)
 })

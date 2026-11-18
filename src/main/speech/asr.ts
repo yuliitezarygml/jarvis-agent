@@ -6,7 +6,7 @@
 // Protocol (Node IPC, "advanced" serialization so Float32Array crosses without copies):
 //   parent → child  {type:'init', cfg}  |  {type:'job', id, samples, commandMode, gateHit, partial, aliases, sensitivity, language, wakeEnabled}
 //   child  → parent {type:'ready'}      |  {type:'event', id, event}  |  {type:'done', id, produced}
-import { stripWake, looseWakeGate, wakeThreshold, findWake, fixRomanian } from '../../shared/textmatch'
+import { stripWake, looseWakeGate, wakeThreshold, findWake } from '../../shared/textmatch'
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const sherpa = require('sherpa-onnx-node')
@@ -51,8 +51,7 @@ function getWhisper(): any {
     const dir = cfg.whisperDir
     const kind = cfg.whisperKind
     // With the Russian recogniser present Whisper only ever hears English: force it (no language-ID mistakes, faster).
-    // Romanian is pinned in Settings and goes to Whisper alone.
-    const lang = cfg.language === 'ro' ? 'ro' : cfg.gigaDir ? 'en' : cfg.language
+    const lang = cfg.gigaDir ? 'en' : cfg.language
     whisper = new sherpa.OfflineRecognizer({
       featConfig: { sampleRate: SR, featureDim: 80 },
       modelConfig: {
@@ -117,7 +116,6 @@ function whisperText(x: Float32Array): { text: string; lang: string } {
 
 /** Russian recogniser first (fast, excellent); non-Russian output means English → Whisper. Settings can pin a language. */
 function transcribe(x: Float32Array, language: string): { text: string; lang: string } {
-  if (language === 'ro') return { text: fixRomanian(whisperText(x).text), lang: 'ro' }
   if (language !== 'en' && cfg.gigaDir) {
     const g = gigaText(x)
     if (language === 'ru' || mostlyRussian(g)) return { text: g, lang: 'ru' }
@@ -162,7 +160,7 @@ function runJob(m: Job) {
       // Stage 1: Russian recogniser on every short utterance — finds the wake word even if the cheap gate misheard it.
       let verified = false
       let gigaLatin = ''
-      if (m.language !== 'en' && m.language !== 'ro' && cfg.gigaDir) {
+      if (m.language !== 'en' && cfg.gigaDir) {
         const g = gigaText(x)
         gigaLatin = g
         emit({ type: 'debug', giga: g, partial: m.partial })
@@ -190,8 +188,8 @@ function runJob(m: Job) {
         if (!maybeName) return
         emit({ type: 'busy', on: true })
         const w = whisperText(x)
-        raw = (m.language === 'ro' ? fixRomanian(w.text) : w.text) || m.partial
-        lang = m.language === 'ro' ? 'ro' : w.lang === 'ru' ? 'ru' : 'en'
+        raw = w.text || m.partial
+        lang = w.lang === 'ru' ? 'ru' : 'en'
         const r = stripWake(raw, m.aliases, m.sensitivity, relaxed)
         if (!r.hit) {
           emit({ type: 'wakeRejected', text: raw })

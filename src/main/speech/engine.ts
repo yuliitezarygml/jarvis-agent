@@ -4,7 +4,7 @@ import { EventEmitter } from 'events'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import type { Settings } from '../../shared/types'
-import { pathsFor, romanianWhisper } from '../models'
+import { pathsFor } from '../models'
 
 export type SpeechEvent =
   | { type: 'ready' }
@@ -134,16 +134,13 @@ export class SpeechEngine extends EventEmitter {
         if (this.queue.length) this.ensureChild()
       }
     })
-    const ro = s.sttLanguage === 'ro'
-    const kind = (ro && romanianWhisper(this.base, whisperKind(s))) || (existsSync(p.whisperDir(whisperKind(s))) ? whisperKind(s) : 'base')
-    if (ro && !romanianWhisper(this.base, whisperKind(s))) console.warn('[asr] Romanian needs Whisper small or turbo — not installed yet')
     c.send({
       type: 'init',
-      warm: s.sttLanguage !== 'en' && !ro,
+      warm: s.sttLanguage !== 'en',
       cfg: {
-        whisperDir: p.whisperDir(kind),
-        whisperKind: kind,
-        parakeetDir: !ro && s.sttModel === 'parakeet-en' && existsSync(p.parakeetDir) ? p.parakeetDir : '',
+        whisperDir: existsSync(p.whisperDir(whisperKind(s))) ? p.whisperDir(whisperKind(s)) : p.whisperDir('base'),
+        whisperKind: existsSync(p.whisperDir(whisperKind(s))) ? whisperKind(s) : 'base',
+        parakeetDir: s.sttModel === 'parakeet-en' && existsSync(p.parakeetDir) ? p.parakeetDir : '',
         gigaDir: existsSync(p.gigaDir) ? p.gigaDir : '',
         threads: 4,
         language: s.sttLanguage === 'auto' ? '' : s.sttLanguage

@@ -38,19 +38,10 @@ const TRANSLIT: [RegExp, string][] = [
   [/z/g, 'з']
 ]
 
-/** Romanian has two spellings of ș / ț (comma below = correct, cedilla = legacy); recognisers and models emit both. */
-export function fixRomanian(s: string): string {
-  return s.replace(/ş/g, 'ș').replace(/Ş/g, 'Ș').replace(/ţ/g, 'ț').replace(/Ţ/g, 'Ț')
-}
-
 export function normalize(s: string): string {
   return s
     .toLowerCase()
     .replace(/ё/g, 'е')
-    .replace(/[ăâ]/g, 'a')
-    .replace(/î/g, 'i')
-    .replace(/[șş]/g, 's')
-    .replace(/[țţ]/g, 't')
     .replace(/[^a-zа-я0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()

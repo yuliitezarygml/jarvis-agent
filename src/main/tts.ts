@@ -5,10 +5,6 @@ import { EventEmitter } from 'events'
 import type { XttsSidecar } from './xtts'
 import { fishSynth, serverSynth, type FishConfig } from './fish'
 import { resourcePath } from './paths'
-import type { SpeechLang } from '../shared/types'
-
-/** a Piper process holds its voice model (~100–150 MB); it is stopped after this long unused and reloads in under a second */
-const PIPER_IDLE_MS = 5 * 60_000
 
 /** Piper needs the VC++ runtime; the app ships it in resources/native/vcrt for PCs without the redistributable. */
 function piperEnv() {
@@ -25,7 +21,6 @@ class PiperVoice {
   private queue: { resolve: (p: string) => void; reject: (e: Error) => void }[] = []
   private buf = ''
   private outDir: string
-  private idleTimer: NodeJS.Timeout | null = null
 
   constructor(
     private exe: string,
@@ -62,19 +57,8 @@ class PiperVoice {
     this.proc = p
   }
 
-  private armIdle() {
-    if (this.idleTimer) clearTimeout(this.idleTimer)
-    this.idleTimer = setTimeout(() => (this.queue.length ? this.armIdle() : this.dispose()), PIPER_IDLE_MS)
-  }
-
-  /** load the voice model ahead of time (e.g. on the wake word) without speaking */
-  ensure() {
-    this.armIdle()
-    if (!this.proc) this.start()
-  }
-
   synth(text: string, lengthScale: number): Promise<string> {
-    this.ensure()
+    if (!this.proc) this.start()
     return new Promise((resolve, reject) => {
       // Piper prints nothing for input it cannot speak; without a timeout the whole queue would stall forever.
       const timer = setTimeout(() => {
@@ -93,8 +77,6 @@ class PiperVoice {
   }
 
   dispose() {
-    if (this.idleTimer) clearTimeout(this.idleTimer)
-    this.idleTimer = null
     try {
       this.proc?.kill()
     } catch {}
@@ -105,7 +87,7 @@ class PiperVoice {
 export interface SpeakRequest {
   id: string
   text: string
-  lang: SpeechLang
+  lang: 'ru' | 'en'
   voice: string
   speed: number
 }
@@ -136,33 +118,23 @@ export class Tts extends EventEmitter {
   }
 
   /** Synthesise one sentence → returns audio bytes (wav, or mp3 from the free server). */
-  async synth(text: string, voiceId: string, speed = 1, lang: SpeechLang = 'ru'): Promise<Buffer> {
+  async synth(text: string, voiceId: string, speed = 1, lang: 'ru' | 'en' = 'ru'): Promise<Buffer> {
     if (voiceId.startsWith('fish:')) {
       const f = this.fish!()
       const l = voiceId === 'fish:en' ? 'en' : 'ru'
       return f.mode === 'server' ? serverSynth(f, text, l, speed) : fishSynth(f, text, l, speed)
     }
-    if (voiceId.startsWith('xtts:')) return this.xtts!.synth(text, lang === 'ru' ? 'ru' : 'en', speed)
-    const lengthScale = Math.min(2, Math.max(0.5, 1 / speed))
-    const file = await this.piper(voiceId).synth(text, lengthScale)
-    const buf = readFileSync(file)
-    rmSync(file, { force: true })
-    return buf
-  }
-
-  private piper(voiceId: string) {
+    if (voiceId.startsWith('xtts:')) return this.xtts!.synth(text, lang, speed)
     let v = this.voices.get(voiceId)
     if (!v) {
       v = new PiperVoice(this.paths.piperExe, this.paths.voice(voiceId), this.tmpRoot, voiceId)
       this.voices.set(voiceId, v)
     }
-    return v
-  }
-
-  /** start loading a local voice now (the wake word was heard) so the first reply is not delayed by the model load */
-  preload(voiceId: string) {
-    if (voiceId.startsWith('fish:') || voiceId.startsWith('xtts:') || !this.available(voiceId)) return
-    this.piper(voiceId).ensure()
+    const lengthScale = Math.min(2, Math.max(0.5, 1 / speed))
+    const file = await v.synth(text, lengthScale)
+    const buf = readFileSync(file)
+    rmSync(file, { force: true })
+    return buf
   }
 
   warm(voiceId: string) {
@@ -212,19 +184,8 @@ export function speakable(text: string): string {
     .trim()
 }
 
-const RO_WORDS = new Set(['si', 'și', 'este', 'sunt', 'nu', 'cu', 'pe', 'la', 'din', 'care', 'mai', 'sau', 'pentru', 'că', 'ca', 'să', 'vă', 'am', 'ați', 'acest', 'această', 'acum', 'domnule', 'bună', 'da', 'ce', 'unde', 'cum', 'aici', 'deschide', 'fișierul'])
-const EN_WORDS = new Set(['the', 'and', 'is', 'are', 'to', 'of', 'in', 'it', 'you', 'that', 'this', 'for', 'with', 'on', 'sir', 'what', 'have', 'be', 'will', 'i'])
-
-/** Russian = Cyrillic; Latin text is Romanian when it has Romanian letters or reads like Romanian. `preferRo`: Romanian is
- *  the pinned language, so Latin text without clear English signals is Romanian. */
-export function detectLang(text: string, preferRo = false): SpeechLang {
+export function detectLang(text: string): 'ru' | 'en' {
   const cyr = (text.match(/[а-яё]/gi) || []).length
-  const lat = (text.match(/[a-zăâîșțşţ]/gi) || []).length
-  if (cyr >= lat && cyr > 0) return 'ru'
-  if (/[ăîșțşţ]/i.test(text)) return 'ro'
-  const words = text.toLowerCase().split(/[^\p{L}]+/u).filter(Boolean)
-  const ro = words.filter((w) => RO_WORDS.has(w)).length
-  const en = words.filter((w) => EN_WORDS.has(w)).length
-  if (preferRo) return en > ro ? 'en' : 'ro'
-  return ro >= 2 && ro > en ? 'ro' : cyr >= lat ? 'ru' : 'en'
+  const lat = (text.match(/[a-z]/gi) || []).length
+  return cyr >= lat ? 'ru' : 'en'
 }

@@ -5,8 +5,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { createHash, randomUUID } from 'crypto'
 import { spawn } from 'child_process'
 import { DEFAULT_SETTINGS } from '../shared/types'
-import type { AppStatus, AssistantState, ChatItem, HighlightTarget, PermissionRequest, Routine, RoutineStep, SpeechLang, ToolEvent } from '../shared/types'
-import { phraseScore, normalize, fixRomanian } from '../shared/textmatch'
+import type { AppStatus, AssistantState, ChatItem, HighlightTarget, PermissionRequest, Routine, RoutineStep, ToolEvent } from '../shared/types'
+import { phraseScore, normalize } from '../shared/textmatch'
 import { SettingsStore, MemoryStore, RoutineStore, ThreadStore, dataDir } from './store'
 import { Opencode } from './opencode'
 import { JarvisMcp, Hub } from './mcp'
@@ -66,7 +66,7 @@ export class Assistant extends EventEmitter implements Hub {
   private userSpeaking = false
   private bannerMessage = ''
   private activity = ''
-  private lastLang: SpeechLang = 'ru'
+  private lastLang: 'ru' | 'en' = 'ru'
   private lastSpeechAt = 0
   private controlTimer: NodeJS.Timeout | null = null
   private controlOn = false
@@ -112,20 +112,6 @@ export class Assistant extends EventEmitter implements Hub {
 
   // ---------------------------------------------------------------- Hub
   settings = () => this.settingsStore.get()
-
-  /** the voice chosen for a language, and the bundled Piper voice used when it is missing or failing */
-  private voiceFor(lang: SpeechLang) {
-    const s = this.settings()
-    return lang === 'ru' ? s.voiceRu : lang === 'ro' ? s.voiceRo || DEFAULT_SETTINGS.voiceRo : s.voiceEn
-  }
-  private static fallbackVoice(lang: SpeechLang) {
-    return lang === 'ru' ? 'ru_RU-denis-medium' : lang === 'ro' ? 'ro_RO-mihai-medium' : 'jarvis-high'
-  }
-  /** language of a request: what the recogniser reported, else guessed from the text */
-  private langOf(text: string, hint = ''): SpeechLang {
-    if (hint === 'ru' || hint === 'en' || hint === 'ro') return hint
-    return detectLang(text, this.settings().sttLanguage === 'ro')
-  }
   isVision = () => this.opencode?.isVision(this.settings().model) ?? false
   askVision = (jpeg: Buffer, q: string) => this.opencode.visionQuery(jpeg, q)
 
@@ -292,7 +278,6 @@ export class Assistant extends EventEmitter implements Hub {
         break
       case 'wake':
         void this.opencode.wake() // the agent may be unloaded while idle: start it while the user is still talking
-        this.tts.preload(this.voiceFor(this.lastLang))
         this.onWake()
         break
       case 'wakeRejected':
@@ -326,8 +311,7 @@ export class Assistant extends EventEmitter implements Hub {
   // ---------------------------------------------------------------- wake acknowledgement ("Yes, sir?")
   private static readonly ACK = {
     ru: ['Да, сэр?', 'Слушаю, сэр.', 'К вашим услугам.', 'Я весь внимание, сэр.', 'Чем могу помочь?'],
-    en: ['Yes, sir?', 'At your service.', "I'm listening, sir.", 'How may I help?', 'Yes?'],
-    ro: ['Da, domnule?', 'Vă ascult, domnule.', 'La dispoziția dumneavoastră.', 'Cu ce vă pot ajuta?', 'Da?']
+    en: ['Yes, sir?', 'At your service.', "I'm listening, sir.", 'How may I help?', 'Yes?']
   }
   /** Real lines from the Jarvis recordings (matched by transcript) — instant and authentic when the cloned voice is on. */
   private static readonly REAL_ACK = ['да сэр', 'к вашим услугам сэр', 'всегда к вашим услугам сэр', 'как пожелаете']
@@ -356,7 +340,7 @@ export class Assistant extends EventEmitter implements Hub {
   private isAckEcho(text: string): boolean {
     const t = normalize(text)
     if (!t || t.length > 40) return false
-    const all = [...Assistant.ACK.ru, ...Assistant.ACK.en, ...Assistant.ACK.ro, ...Assistant.REAL_ACK]
+    const all = [...Assistant.ACK.ru, ...Assistant.ACK.en, ...Assistant.REAL_ACK]
     return all.some((a) => phraseScore(t, a) >= 0.78)
   }
 
@@ -366,9 +350,8 @@ export class Assistant extends EventEmitter implements Hub {
     this.ackPreparing = true
     try {
       const s = this.settings()
-      for (const lang of ['en', 'ru', 'ro'] as const) {
-        if (lang === 'ro' && s.sttLanguage !== 'ro') continue
-        const voice = this.voiceFor(lang)
+      for (const lang of ['en', 'ru'] as const) {
+        const voice = lang === 'ru' ? s.voiceRu : s.voiceEn
         if (!this.tts.available(voice)) continue
         if (voice.startsWith('xtts:') && this.xtts.state !== 'ready') continue
         if (lang === 'ru' && (voice.startsWith('xtts:') || voice.startsWith('fish:')) && this.realAckClips().length) continue // real clips are used instead
@@ -399,9 +382,9 @@ export class Assistant extends EventEmitter implements Hub {
   async ack(langHint = '') {
     const s = this.settings()
     if (s.wakeAck === 'off' || !s.voiceEnabled || this.speakingDepth > 0) return
-    const lang: SpeechLang = langHint === 'ru' || langHint === 'en' || langHint === 'ro' ? langHint : this.lastLang
+    const lang: 'ru' | 'en' = langHint === 'ru' || langHint === 'en' ? langHint : this.lastLang
     this.lastLang = lang
-    const voice = this.voiceFor(lang)
+    const voice = lang === 'ru' ? s.voiceRu : s.voiceEn
     let wav: Buffer | undefined
     let label = ''
     try {
@@ -417,7 +400,7 @@ export class Assistant extends EventEmitter implements Hub {
         wav = this.ackCache.get(`${voice}|${line}`)
         if (!wav) {
           // not pre-built yet (cloned voice still loading): use the fast Piper voice rather than make the user wait
-          const fb = Assistant.fallbackVoice(lang)
+          const fb = lang === 'ru' ? 'ru_RU-denis-medium' : 'jarvis-high'
           if (this.tts.available(fb)) wav = await Promise.race([this.tts.synth(line, fb, s.voiceSpeed, lang), new Promise<undefined>((r) => setTimeout(r, 2500))])
         }
         label = line
@@ -483,8 +466,7 @@ export class Assistant extends EventEmitter implements Hub {
   /** Entry point for anything the user says or types. */
   async handleCommand(text: string, via: 'voice' | 'text', lang = '') {
     this.lastWasVoice = via === 'voice'
-    this.lastLang = /[а-яё]/i.test(text) ? 'ru' : this.langOf(text, lang)
-    if (this.lastLang === 'ro') text = fixRomanian(text)
+    this.lastLang = lang === 'ru' || /[а-яё]/i.test(text) ? 'ru' : 'en'
     if (this.speakingDepth > 0) this.stopSpeaking()
     if (this.opencode.isBusy) {
       this.mcp.computer.cancel() // a new request supersedes the running one: drop any queued clicks/keys
@@ -543,7 +525,7 @@ export class Assistant extends EventEmitter implements Hub {
       const system = buildSystemExtra({
         memory: this.memory.promptBlock(),
         routines: this.routines.list(),
-        lang: { ru: 'Russian', en: 'English', ro: 'Romanian (always with correct diacritics: ă â î ș ț)' }[this.lastLang],
+        lang: lang === 'ru' || /[а-яё]/i.test(text) ? 'Russian' : 'English',
         via,
         screen: displays.join(' + '),
         vision: this.isVision(),
@@ -687,16 +669,16 @@ export class Assistant extends EventEmitter implements Hub {
   private async sayNow(text: string, highlights: HighlightTarget[] = [], opts: { silent?: boolean } = {}) {
     if (!opts.silent) this.sayCalledThisTurn = true
     const s = this.settings()
-    const clean = fixRomanian(speakable(text))
+    const clean = speakable(text)
     if (!clean || !/[\p{L}\p{N}]/u.test(clean)) return
     this.lastSpeechAt = Date.now()
     this.emit('chat', { id: uid(), kind: 'say', text: clean, at: Date.now() } satisfies ChatItem)
     this.emit('subtitle', clean)
     if (highlights.length) void this.overlay.show(highlights)
 
-    const lang = detectLang(clean, s.sttLanguage === 'ro' || this.lastLang === 'ro')
-    let voice = this.voiceFor(lang)
-    if (!this.tts.available(voice)) voice = Assistant.fallbackVoice(lang) // chosen voice not installed
+    const lang = detectLang(clean)
+    let voice = lang === 'ru' ? s.voiceRu : s.voiceEn
+    if (!this.tts.available(voice)) voice = lang === 'ru' ? 'ru_RU-denis-medium' : 'jarvis-high' // chosen voice not installed
     const ok = s.voiceEnabled && this.tts.available(voice)
     this.speakAbort = { aborted: false }
     const token = this.speakAbort
@@ -713,7 +695,7 @@ export class Assistant extends EventEmitter implements Hub {
           // cloned voice not loaded (it unloads when idle / is still starting): kick it off and answer with Piper now
           if (voice.startsWith('xtts:') && this.xtts.state !== 'ready') {
             void this.xtts.ensure().catch(() => {})
-            const fb0 = Assistant.fallbackVoice(lang)
+            const fb0 = lang === 'ru' ? 'ru_RU-denis-medium' : 'jarvis-high'
             if (this.tts.available(fb0)) return this.tts.synth(t, fb0, s.voiceSpeed, lang)
           }
           try {
@@ -725,7 +707,7 @@ export class Assistant extends EventEmitter implements Hub {
               this.fishWarned = true
               this.emit('chat', { id: uid(), kind: 'system', text: '⚠ ' + (e as Error).message + ' — using the local voice', at: Date.now() } satisfies ChatItem)
             }
-            const fb = Assistant.fallbackVoice(lang)
+            const fb = lang === 'ru' ? 'ru_RU-denis-medium' : 'jarvis-high'
             return this.tts.synth(t, fb, s.voiceSpeed, lang)
           }
         }

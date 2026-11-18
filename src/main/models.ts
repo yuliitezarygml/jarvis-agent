@@ -144,8 +144,7 @@ export const CATALOG: Def[] = [
   { ...piper('ru', 'RU', 'denis', 'medium', 63, 'Русский — Денис (deep male)'), required: true },
   piper('ru', 'RU', 'dmitri', 'medium', 63, 'Русский — Дмитрий'),
   piper('ru', 'RU', 'ruslan', 'medium', 63, 'Русский — Руслан'),
-  piper('ru', 'RU', 'irina', 'medium', 63, 'Русский — Ирина'),
-  piper('ro', 'RO', 'mihai', 'medium', 63, 'Română — Mihai')
+  piper('ru', 'RU', 'irina', 'medium', 63, 'Русский — Ирина')
 ]
 
 export function modelsDir(base: string) {
@@ -246,21 +245,4 @@ export function pathsFor(base: string) {
     piperExe: sub('tts/piper/piper.exe'),
     voice: (id: string) => sub(`tts/voices/${id}.onnx`)
   }
-}
-
-/** Whisper that understands Romanian well enough: turbo or small (base mishears it), the user's choice first. */
-export function romanianWhisper(base: string, preferred: 'base' | 'small' | 'turbo'): 'small' | 'turbo' | '' {
-  const p = pathsFor(base)
-  const order: ('small' | 'turbo')[] = preferred === 'turbo' ? ['turbo', 'small'] : ['small', 'turbo']
-  return order.find((k) => existsSync(p.whisperDir(k))) ?? ''
-}
-
-/** Assets still missing for hearing and speaking Romanian. */
-export function romanianMissing(base: string, voice: string): string[] {
-  const p = pathsFor(base)
-  const miss: string[] = []
-  if (!existsSync(p.piperExe)) miss.push('piper-runtime')
-  if (!existsSync(p.voice(voice))) miss.push(CATALOG.some((d) => d.id === voice) ? voice : 'ro_RO-mihai-medium')
-  if (!romanianWhisper(base, 'small')) miss.push('whisper-small')
-  return miss
 }

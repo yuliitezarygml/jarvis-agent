@@ -4,8 +4,7 @@ import { existsSync, writeFileSync } from 'fs'
 import { IPC, DEFAULT_SETTINGS, type Settings, type SetupProgress } from '../shared/types'
 import { Assistant } from './assistant'
 import { dataDir } from './store'
-import { listAssets, installAsset, romanianMissing } from './models'
-import { detectLang } from './tts'
+import { listAssets, installAsset } from './models'
 import { rendererUrl, preloadPath, resourcePath } from './paths'
 import { initLogging, logDir } from './log'
 import { Updater } from './updater'
@@ -72,6 +71,7 @@ function iconImage() {
 }
 
 function createMain() {
+  const s = assistant.settings()
   const promo = !!process.env.JARVIS_PROMO // off-screen rendering for the promo video (src/main/promo.ts)
   mainWin = new BrowserWindow({
     width: promo ? 1080 : 1180,
@@ -86,7 +86,9 @@ function createMain() {
     icon: iconImage(),
     webPreferences: { preload: preloadPath(), backgroundThrottling: false, offscreen: promo }
   })
-  mainWin.on('ready-to-show', () => mainWin?.show())
+  mainWin.on('ready-to-show', () => {
+    if (!s.startMinimized) mainWin?.show()
+  })
   // closing to the tray DESTROYS the window (≈200 MB of renderer memory); showMain() rebuilds it from main-process state
   mainWin.on('closed', () => {
     mainWin = null
@@ -260,7 +262,6 @@ function applySettings(patch: Partial<Settings>) {
     hudSig = ''
     syncHud()
   }
-  if (patch.sttLanguage === 'ro' && before.sttLanguage !== 'ro') void installLanguageAssets()
   if (patch.cloneIdleMinutes !== undefined) assistant.xtts.idleMinutes = patch.cloneIdleMinutes
   if ('fishApiKey' in patch || 'fishVoiceRu' in patch || 'fishVoiceEn' in patch || 'fishModel' in patch) {
     assistant.resetFishState()
@@ -382,7 +383,8 @@ function wireIpc() {
     return out
   })
   ipcMain.handle('voice:preview', async (_e, text: string, voice: string) => {
-    const wav = await assistant.tts.synth(text, voice, assistant.settings().voiceSpeed, detectLang(text))
+    const lang = /[а-яё]/i.test(text) ? 'ru' : 'en'
+    const wav = await assistant.tts.synth(text, voice, assistant.settings().voiceSpeed, lang)
     toUi('noop')
     hudWin?.webContents.send(IPC.ttsPlay, { id: 'preview-' + Date.now(), wav, fx: assistant.settings().voiceFx, volume: assistant.settings().voiceVolume })
   })
@@ -449,18 +451,6 @@ async function autoInstall() {
   console.log('[setup] auto-installing', missing().join(', '))
   await installAssets(missing(), 3)
   if (missing().length) setTimeout(() => void autoInstall(), 5 * 60_000)
-}
-
-/** Romanian picked in Settings: fetch its voice and a Whisper that understands it; retries later while offline. */
-async function installLanguageAssets() {
-  const s = assistant.settings()
-  if (s.sttLanguage !== 'ro') return
-  const missing = romanianMissing(dataDir(), s.voiceRo)
-  if (!missing.length) return
-  console.log('[setup] Romanian: installing', missing.join(', '))
-  await installAssets(missing, 3)
-  assistant.speech.updateConfig() // the next utterance starts the recogniser with the new Whisper
-  if (romanianMissing(dataDir(), assistant.settings().voiceRo).length) setTimeout(() => void installLanguageAssets(), 5 * 60_000)
 }
 
 function wireAssistantEvents() {
@@ -586,17 +576,13 @@ app.whenReady().then(async () => {
   assistant = new Assistant()
   wireIpc()
   wireAssistantEvents()
-  // started at login / "start minimized": live in the tray without the ~200 MB main window; showMain() builds it on demand
-  const devRun = ['JARVIS_PROMO', 'JARVIS_SHOTS', 'JARVIS_PROMPTS', 'JARVIS_NARROW'].some((k) => process.env[k])
-  const startHidden = !devRun && (process.argv.includes('--hidden') || assistant.settings().startMinimized)
-  if (!startHidden) createMain()
+  createMain()
   createHud()
   buildTray()
   registerHotkey()
   applyAutoStart()
   await assistant.init()
   void autoInstall()
-  void installLanguageAssets()
   updater.init(assistant.settings().autoUpdate)
   updater.on('state', (st) => broadcast('update:changed', st))
   if (process.env.JARVIS_TEST_WAIT) {

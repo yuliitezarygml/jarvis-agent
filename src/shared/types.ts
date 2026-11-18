@@ -1,6 +1,4 @@
 export type Lang = 'ru' | 'en'
-/** languages Jarvis can hear and speak (the interface itself is RU / EN) */
-export type SpeechLang = Lang | 'ro'
 export type AssistantState = 'idle' | 'wake' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'error'
 
 export interface Settings {
@@ -12,12 +10,10 @@ export interface Settings {
   interfaceLang: Lang | 'auto'
   micDeviceId: string
   sttModel: 'parakeet-en' | 'whisper-base' | 'whisper-small' | 'whisper-turbo'
-  sttLanguage: 'auto' | SpeechLang
+  sttLanguage: 'auto' | Lang
   voiceEnabled: boolean
   voiceRu: string
   voiceEn: string
-  /** Romanian is always spoken by a local Piper voice */
-  voiceRo: string
   voiceSpeed: number
   voiceVolume: number
   voiceFx: boolean
@@ -75,7 +71,6 @@ export const DEFAULT_SETTINGS: Settings = {
   voiceEnabled: true,
   voiceRu: 'fish:ru',
   voiceEn: 'fish:en',
-  voiceRo: 'ro_RO-mihai-medium',
   voiceSpeed: 1,
   voiceVolume: 0.9,
   voiceFx: true,
