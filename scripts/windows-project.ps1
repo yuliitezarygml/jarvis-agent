@@ -11,6 +11,13 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $projectRoot
 $script:nodeExe = $null
 $script:npmCli = $null
+$projectLock = $null
+$dependencyStamp = Join-Path $projectRoot '.tmp\windows-dependencies.json'
+
+function Get-DependencySignature {
+    return ((Get-FileHash -LiteralPath (Join-Path $projectRoot 'package.json') -Algorithm SHA256).Hash + ':' +
+        (Get-FileHash -LiteralPath (Join-Path $projectRoot 'package-lock.json') -Algorithm SHA256).Hash)
+}
 
 function Initialize-Node {
     if ($script:nodeExe) { return }
@@ -75,19 +82,31 @@ function Invoke-Npm {
 
 function Install-Dependencies {
     Initialize-Node
-    Invoke-Npm -NpmArgs @('ci')
+    if (-not $Check -and (Test-Path -LiteralPath $dependencyStamp)) { Remove-Item -LiteralPath $dependencyStamp -Force }
+    Invoke-Npm -NpmArgs @('ci', '--no-audit', '--no-fund')
     # Recent Electron releases install their executable on demand; fetch it now, before dev/build.
     Write-Host '> node node_modules/electron/install.js'
     if (-not $Check) {
         & $script:nodeExe (Join-Path $projectRoot 'node_modules\electron\install.js')
         if ($LASTEXITCODE -ne 0) { throw 'Electron installation failed. Check the connection and retry install-deps.bat.' }
+        @{ signature = Get-DependencySignature } | ConvertTo-Json | Set-Content -LiteralPath $dependencyStamp -Encoding UTF8
     }
 }
 
 function Ensure-Dependencies {
-    if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'node_modules\.bin\electron-vite.cmd'))) {
-        Install-Dependencies
+    $ready = $false
+    if (Test-Path -LiteralPath $dependencyStamp) {
+        try {
+            $stamp = Get-Content -LiteralPath $dependencyStamp -Raw | ConvertFrom-Json
+            $ready = $stamp.signature -eq (Get-DependencySignature)
+            foreach ($file in @('node_modules\.package-lock.json', 'node_modules\.bin\electron-vite.cmd',
+                'node_modules\typescript\bin\tsc', 'node_modules\electron-builder\cli.js',
+                'node_modules\mermaid\dist\mermaid.min.js', 'node_modules\electron\dist\electron.exe')) {
+                if (-not (Test-Path -LiteralPath (Join-Path $projectRoot $file) -PathType Leaf)) { $ready = $false }
+            }
+        } catch { $ready = $false }
     }
+    if (-not $ready) { Install-Dependencies }
 }
 
 function Get-InstallerPath {
@@ -109,6 +128,15 @@ function Build-Installer {
 }
 
 try {
+    $temporaryDirectory = Join-Path $projectRoot '.tmp'
+    New-Item -ItemType Directory -Path $temporaryDirectory -Force | Out-Null
+    try {
+        # The handle is released by Windows even if this console crashes; there is no stale-lock cleanup.
+        $projectLock = [System.IO.File]::Open((Join-Path $temporaryDirectory 'windows-project.lock'),
+            [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+    } catch [System.IO.IOException] {
+        throw 'Another Jarvis BAT task is already running. Wait for it to finish or close its dev window, then retry.'
+    }
     Write-Host "Jarvis project: $projectRoot"
     if ($Check) { Write-Host '[CHECK] Commands will be shown without installing, building or launching anything.' }
     switch ($Task) {
@@ -138,4 +166,6 @@ try {
 } catch {
     Write-Host ('[ERROR] ' + $_.Exception.Message) -ForegroundColor Red
     exit 1
+} finally {
+    if ($projectLock) { $projectLock.Dispose() }
 }
