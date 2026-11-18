@@ -124,7 +124,7 @@ export class Tts extends EventEmitter {
     if (lang === 'ro') {
       text = romanianDiacritics(text)
       // The shared Fish server and the custom RU/EN clone do not promise Romanian support.
-      if (voiceId.startsWith('fish:') || voiceId.startsWith('xtts:')) voiceId = 'ro_RO-mihai-medium'
+      throw new Error('Romanian speech has been removed from this version')
     }
     if (voiceId.startsWith('fish:')) {
       const f = this.fish!()

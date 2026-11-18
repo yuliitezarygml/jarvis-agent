@@ -76,10 +76,10 @@ export const CATALOG: Def[] = [
   },
   {
     id: 'whisper-base',
-    name: 'Whisper base (RU / RO / EN auto detection)',
+    name: 'Whisper base (резервное распознавание)',
     kind: 'stt',
     sizeMB: 198,
-    required: true,
+    required: false,
     check: 'stt/sherpa-onnx-whisper-base',
     archive: { url: `${GH}/sherpa-onnx-whisper-base.tar.bz2`, type: 'tar', into: 'stt' }
   },
@@ -89,7 +89,7 @@ export const CATALOG: Def[] = [
     kind: 'stt',
     sizeMB: 156,
     required: true,
-    note: 'Used automatically when Whisper detects Russian',
+    note: 'Основное распознавание русской речи',
     check: 'stt/sherpa-onnx-nemo-ctc-punct-giga-am-v3-russian-2025-12-16',
     archive: { url: `${GH}/sherpa-onnx-nemo-ctc-punct-giga-am-v3-russian-2025-12-16.tar.bz2`, type: 'tar', into: 'stt' }
   },
@@ -98,7 +98,7 @@ export const CATALOG: Def[] = [
     name: 'Parakeet-TDT 110M (English, light + accurate)',
     kind: 'stt',
     sizeMB: 108,
-    required: true,
+    required: false,
     note: 'English recogniser: 3x faster and lighter than Whisper',
     check: 'stt/sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8',
     archive: { url: `${GH}/sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8.tar.bz2`, type: 'tar', into: 'stt' }
@@ -135,7 +135,7 @@ export const CATALOG: Def[] = [
     name: 'Jarvis (MCU-style, English) — high',
     kind: 'tts',
     sizeMB: 110,
-    required: true,
+    required: false,
     note: 'Community Piper model emulating the film voice',
     check: 'tts/voices/jarvis-high.onnx',
     piperConfig: 'tts/voices/jarvis-high.onnx.json',
@@ -160,8 +160,7 @@ export const CATALOG: Def[] = [
   { ...piper('ru', 'RU', 'denis', 'medium', 63, 'Русский — Денис (deep male)'), required: true },
   piper('ru', 'RU', 'dmitri', 'medium', 63, 'Русский — Дмитрий'),
   piper('ru', 'RU', 'ruslan', 'medium', 63, 'Русский — Руслан'),
-  piper('ru', 'RU', 'irina', 'medium', 63, 'Русский — Ирина'),
-  { ...piper('ro', 'RO', 'mihai', 'medium', 63, 'Română — Mihai'), required: true }
+  piper('ru', 'RU', 'irina', 'medium', 63, 'Русский — Ирина')
 ]
 
 export function modelsDir(base: string) {

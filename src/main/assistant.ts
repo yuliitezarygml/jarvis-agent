@@ -240,7 +240,7 @@ export class Assistant extends EventEmitter implements Hub {
 
   prewarmVoices() {
     const s = this.settings()
-    for (const v of [s.voiceRu, s.voiceRo, s.voiceEn]) this.tts.warm(v)
+    for (const v of [s.voiceRu, s.voiceEn]) this.tts.warm(v)
     void this.prepareAcks()
     if (!s.voiceRu.startsWith('xtts:') && !s.voiceEn.startsWith('xtts:') && this.xtts.state !== 'off') this.xtts.stop()
   }
@@ -290,11 +290,11 @@ export class Assistant extends EventEmitter implements Hub {
 
   private voiceFor(lang: Lang) {
     const s = this.settings()
-    return lang === 'ru' ? s.voiceRu : lang === 'ro' ? s.voiceRo : s.voiceEn
+    return lang === 'en' ? s.voiceEn : s.voiceRu
   }
 
   private fallbackVoice(lang: Lang) {
-    return lang === 'ru' ? 'ru_RU-denis-medium' : lang === 'ro' ? 'ro_RO-mihai-medium' : 'jarvis-high'
+    return lang === 'en' ? 'jarvis-high' : 'ru_RU-denis-medium'
   }
 
   // ---------------------------------------------------------------- speech events

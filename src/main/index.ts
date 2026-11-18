@@ -18,6 +18,7 @@ if (!app.requestSingleInstanceLock()) {
 app.setName('Jarvis')
 initLogging()
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
+let showVoiceSetup = process.argv.includes('--voice-setup')
 app.commandLine.appendSwitch('js-flags', '--expose-gc') // lets the speech worker hand model memory back when idle
 // memory: network and audio services run inside the main process instead of two extra processes.
 // (No process-per-site: sharing one renderer between the opaque main window and the transparent HUD / overlay makes
@@ -100,7 +101,8 @@ function createMain() {
   })
   // the HUD would sit on top of the main window, so it only shows while the main window is not in use
   for (const ev of ['focus', 'blur', 'show', 'hide', 'minimize', 'restore', 'move', 'resize', 'maximize', 'unmaximize'] as const) mainWin.on(ev as any, syncHud)
-  void mainWin.loadURL(rendererUrl('index.html'))
+  void mainWin.loadURL(rendererUrl('index.html') + (showVoiceSetup ? '#voice-focus' : ''))
+  showVoiceSetup = false
 }
 
 /** Windows drops TOPMOST on a window when its style flags change (focusable / click-through) or when another topmost window
@@ -268,7 +270,7 @@ function applySettings(patch: Partial<Settings>) {
     assistant.resetFishState()
     assistant.prewarmVoices()
   }
-  if (patch.voiceRu || patch.voiceRo || patch.voiceEn) assistant.prewarmVoices()
+  if (patch.voiceRu || patch.voiceEn) assistant.prewarmVoices()
   assistant.emitStatus()
   return next
 }
@@ -628,6 +630,7 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(['media', 'audioCapture', 'clipboard-sanitized-write'].includes(permission)))
   session.defaultSession.setPermissionCheckHandler(() => true)
   assistant = new Assistant()
+  if (showVoiceSetup) assistant.speech.prepareVoiceSample(true)
   wireIpc()
   wireAssistantEvents()
   createMain()

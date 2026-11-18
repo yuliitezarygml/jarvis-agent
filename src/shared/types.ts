@@ -16,7 +16,6 @@ export interface Settings {
   voiceEnabled: boolean
   voiceRu: string
   voiceEn: string
-  voiceRo: string
   voiceSpeed: number
   voiceVolume: number
   voiceFx: boolean
@@ -70,16 +69,15 @@ export const DEFAULT_SETTINGS: Settings = {
   wakePhrases: ['джарвис', 'jarvis'],
   wakeEnabled: true,
   wakeSensitivity: 0.6,
-  interfaceLang: 'auto',
+  interfaceLang: 'ru',
   lastInputLanguage: '',
   micDeviceId: 'default',
   voiceFocusEnabled: false,
   sttModel: 'parakeet-en',
-  sttLanguage: 'auto',
+  sttLanguage: 'ru',
   voiceEnabled: true,
   voiceRu: 'fish:ru',
   voiceEn: 'fish:en',
-  voiceRo: 'ro_RO-mihai-medium',
   voiceSpeed: 1,
   voiceVolume: 0.9,
   voiceFx: true,

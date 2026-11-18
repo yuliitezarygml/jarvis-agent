@@ -9,13 +9,17 @@ export function VoiceFocusPanel({ compact = false }: { compact?: boolean }) {
   const enabled = useApp((s) => s.settings.voiceFocusEnabled)
   const patch = useApp((s) => s.patchSettings)
   const [status, setStatus] = useState<VoiceFocusStatus>({ enabled, profile: false, state: 'off', seconds: 0 })
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(() => compact && location.hash === '#voice-focus')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const [removeConfirm, setRemoveConfirm] = useState(false)
   const active = useRef(false)
   const setup = useRef(false)
   useEffect(() => {
+    if (compact && location.hash === '#voice-focus') {
+      setup.current = true
+      void api.invoke(IPC.voiceFocusPrepare, true).catch(() => setError('microphone'))
+    }
     let updated = false, alive = true
     const off = api.on(IPC.voiceFocusChanged, (value: VoiceFocusStatus) => {
       updated = true
@@ -45,6 +49,7 @@ export function VoiceFocusPanel({ compact = false }: { compact?: boolean }) {
     if (pending || recording) void cancel()
     setup.current = false; void api.invoke(IPC.voiceFocusPrepare, false)
     setOpen(false); setRemoveConfirm(false)
+    if (location.hash === '#voice-focus') history.replaceState(null, '', location.href.split('#')[0])
   }
   async function toggle() {
     setError('')
