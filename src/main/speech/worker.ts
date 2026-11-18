@@ -33,6 +33,7 @@ let aliases: string[] = []
 let wakeEnabled = true
 
 let mode: Mode = 'wake'
+let modeVersion = 0
 let generation = 0
 let modeTimer: NodeJS.Timeout | null = null
 let ring: Float32Array[] = []
@@ -44,7 +45,6 @@ let uttLen = 0
 let stream: any = null
 let wakeHit = false
 let lastPartial = ''
-let ignoreUntil = 0
 // energy endpointing: VAD alone never ends an utterance while a movie / music is playing
 let peak = 0
 let quietRun = 0
@@ -104,8 +104,9 @@ function init(m: InitMsg) {
   }
 }
 
-function setMode(next: Mode, timeoutMs = 0, silent = false) {
+function setMode(next: Mode, timeoutMs = 0, silent = false, version = modeVersion) {
   mode = next
+  modeVersion = version
   if (modeTimer) clearTimeout(modeTimer)
   modeTimer = null
   if (next === 'command' && timeoutMs > 0) {
@@ -119,11 +120,11 @@ function setMode(next: Mode, timeoutMs = 0, silent = false) {
       if (inSpeech) forceEnd('timeout')
       mode = 'wake'
       modeTimer = null
-      send({ type: 'mode', mode: 'wake', timedOut: true })
+      send({ type: 'mode', mode: 'wake', timedOut: true, modeVersion: version })
     }
     modeTimer = setTimeout(expire, timeoutMs)
   }
-  if (!silent) send({ type: 'mode', mode })
+  if (!silent) send({ type: 'mode', mode, modeVersion: version })
 }
 
 function startUtterance() {
@@ -169,7 +170,8 @@ function endUtterance(segment?: Float32Array, reason = 'vad') {
 
   const commandMode = mode === 'command'
   if (!commandMode && (!wakeEnabled || (!gateHit && samples.length > SR * 12))) return
-  if (Date.now() < ignoreUntil) return
+  // Never discard a user's whole phrase based on when playback ended.
+  // Recognised output echoes are filtered by the coordinator instead.
   send({ type: 'job', samples, commandMode, gateHit, partial }, [samples.buffer])
 }
 
@@ -239,6 +241,7 @@ parentPort!.on('message', (m: any) => {
   switch (m.type) {
     case 'init':
       generation = m.generation
+      modeVersion = m.modeVersion || 0
       init(m)
       break
     case 'reset':
@@ -253,20 +256,17 @@ parentPort!.on('message', (m: any) => {
       wakeHit = false
       lastPartial = ''
       try { vad?.reset() } catch {}
-      setMode(m.mode === 'command' ? 'command' : 'wake')
+      setMode(m.mode === 'command' ? 'command' : 'wake', 0, false, m.modeVersion)
       break
     case 'audio':
       onAudio(m.samples)
       break
     case 'mode':
-      setMode(m.mode, m.timeoutMs || 0, !!m.silent)
+      setMode(m.mode, m.timeoutMs || 0, !!m.silent, m.modeVersion)
       break
     case 'config':
       if (m.aliases) aliases = m.aliases
       if (typeof m.wakeEnabled === 'boolean') wakeEnabled = m.wakeEnabled
-      break
-    case 'speaking':
-      if (!m.on) ignoreUntil = Date.now() + 250
       break
   }
 })

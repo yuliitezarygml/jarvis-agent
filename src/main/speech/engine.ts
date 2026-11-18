@@ -45,6 +45,7 @@ const CHILD_IDLE_MS = Number(process.env.JARVIS_ASR_IDLE_MS) || 60_000
 export class SpeechEngine extends EventEmitter {
   private worker: Worker | null = null
   private mode: 'wake' | 'command' = 'wake'
+  private modeVersion = 0
   private child: ChildProcess | null = null
   private childReady = false
   private childIdle: NodeJS.Timeout | null = null
@@ -161,20 +162,25 @@ export class SpeechEngine extends EventEmitter {
       this.worker = null
       this.ready = false
     })
-    w.postMessage({ type: 'init', generation: this.generation, vad: p.vad, wakeDir: p.wakeDir, aliases: this.aliases(), wakeEnabled: s.wakeEnabled })
+    w.postMessage({ type: 'init', generation: this.generation, modeVersion: this.modeVersion, vad: p.vad, wakeDir: p.wakeDir, aliases: this.aliases(), wakeEnabled: s.wakeEnabled })
     return true
   }
 
   private onWorker(m: any) {
     if (m.type === 'ready') this.ready = true
     if (m.type !== 'ready' && m.generation !== this.generation) return
+    if (m.type === 'mode') {
+      if (m.modeVersion !== undefined && m.modeVersion !== this.modeVersion) return
+      // An acknowledgement of an older request must not undo a follow-up opened by the main thread.
+      if (!m.timedOut && m.mode !== this.mode) return
+    }
     if (m.type === 'job') return this.enqueue(m)
     if (m.type === 'speech') {
       this.inputSpeaking = m.on
       this.buffer.speech(m.on)
     }
     // A listening-window timeout must not discard a draft or a chunk still being decoded.
-    if (m.type === 'mode' && m.timedOut && (this.conversationActive || this.buffer.active || this.pendingJobs())) {
+    if (m.type === 'mode' && m.timedOut && (this.conversationActive || this.inputSpeaking || this.buffer.active || this.pendingJobs())) {
       this.setMode('command')
       return
     }
@@ -265,7 +271,8 @@ export class SpeechEngine extends EventEmitter {
       this.emit('event', { type: 'inputExpired', reason: 'limit' })
       return
     }
-    this.queue.push({ ...m, id: ++this.seq, capturedAt: Date.now() })
+    // A chunk can arrive before the worker applies the newly verified wake / manual follow-up.
+    this.queue.push({ ...m, commandMode: m.commandMode || this.mode === 'command', id: ++this.seq, capturedAt: Date.now() })
     this.buffer.pending(this.pendingJobs())
     this.ensureChild()
     this.pump()
@@ -307,7 +314,7 @@ export class SpeechEngine extends EventEmitter {
         this.produced = true
         const control = conversationControl(m.event.raw, this.aliases(), this.getSettings().wakeSensitivity)
         if (control) m.event = { ...m.event, text: m.event.raw }
-        if (this.conversationActive && this.collectCommands && this.echo.matches(m.event.text, this.inFlight.capturedAt)) return
+        if (this.collectCommands && this.echo.matches(m.event.text, this.inFlight.capturedAt)) return
         if (this.conversationActive) this.armConversation()
         if (this.conversationActive && !this.buffer.active && conversationPause(m.event.text)) {
           this.emit('event', { type: 'conversationPause' })
@@ -354,7 +361,7 @@ export class SpeechEngine extends EventEmitter {
 
   private setMode(mode: 'wake' | 'command', timeoutMs = 0) {
     this.mode = mode
-    this.worker?.postMessage({ type: 'mode', mode, timeoutMs })
+    this.worker?.postMessage({ type: 'mode', mode, timeoutMs, modeVersion: ++this.modeVersion })
   }
 
   listenFor(seconds: number, collect = true, answerMode = false) {
@@ -377,7 +384,7 @@ export class SpeechEngine extends EventEmitter {
     this.answerMode = false
     this.buffer.cancel()
     this.mode = this.conversationActive ? 'command' : 'wake'
-    this.worker?.postMessage({ type: 'reset', generation: this.generation, mode: this.mode })
+    this.worker?.postMessage({ type: 'reset', generation: this.generation, mode: this.mode, modeVersion: ++this.modeVersion })
     this.emit('event', { type: 'draft', text: '', waiting: false })
     this.emit('event', { type: 'mode', mode: this.mode })
     this.emit('event', { type: 'busy', on: false })

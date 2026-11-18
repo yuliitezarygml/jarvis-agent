@@ -227,6 +227,63 @@ test('engine holds queued continuation chunks and verifies the wake only once', 
   assert.equal(f.output().length, 1)
 })
 
+test('a continuation captured during the wake-only follow-up handoff needs no second wake word', (t) => {
+  const f = engineFixture(t)
+  f.engine.on('event', (e: SpeechEvent) => {
+    // The assistant opens a follow-up window after the recogniser confirms just the name.
+    if (e.type === 'transcript' && !e.text) f.engine.listenFor(7)
+  })
+  const first = f.job()
+  f.result(first, '')
+  f.done(first)
+  const next = f.job(false) // worker captured it before receiving the command-mode message
+  assert.equal(f.sent.at(-1).commandMode, true)
+  f.result(next, 'давай пообщаемся')
+  f.done(next)
+  t.mock.timers.tick(3500)
+  assert.equal(f.output().at(-1)?.text, 'давай пообщаемся')
+})
+
+test('a late worker mode acknowledgement cannot close a newer follow-up window', (t) => {
+  const f = engineFixture(t)
+  f.engine.listenFor(7)
+  f.work({ type: 'mode', mode: 'wake' }) // acknowledgement of an older mode request
+  assert.equal(f.internal.mode, 'command')
+  assert.equal(f.events.some((e) => e.type === 'mode' && e.mode === 'wake'), false)
+  f.work({ type: 'mode', mode: 'wake', timedOut: true })
+  assert.equal(f.internal.mode, 'wake') // a real silence timeout still works
+})
+
+test('a timeout belonging to an older listening window cannot close a new one', (t) => {
+  const f = engineFixture(t)
+  f.engine.listenFor(7)
+  const previous = f.workerMessages.at(-1).modeVersion
+  f.engine.listenFor(12)
+  const current = f.workerMessages.at(-1).modeVersion
+  f.work({ type: 'mode', mode: 'wake', timedOut: true, modeVersion: previous })
+  assert.equal(f.internal.mode, 'command')
+  f.work({ type: 'mode', mode: 'wake', timedOut: true, modeVersion: current })
+  assert.equal(f.internal.mode, 'wake')
+})
+
+test('a wake acknowledgement echo is filtered while the ordinary follow-up stays open', (t) => {
+  const f = engineFixture(t)
+  f.engine.listenFor(7)
+  f.engine.speaking(true, 'Слушаю, сэр.')
+  f.engine.speaking(false)
+  const echo = f.job(true)
+  f.result(echo, 'Слушаю, сэр.')
+  f.done(echo)
+  t.mock.timers.tick(1000)
+  assert.equal(f.engine.commandDraft, false)
+  assert.equal(f.internal.mode, 'command')
+  const next = f.job(true)
+  f.result(next, 'давай пообщаемся')
+  f.done(next)
+  t.mock.timers.tick(3500)
+  assert.deepEqual(f.output().map((e) => e.text), ['давай пообщаемся'])
+})
+
 test('engine never submits a draft while a new chunk is being recognised', (t) => {
   const f = engineFixture(t)
   const first = f.job()

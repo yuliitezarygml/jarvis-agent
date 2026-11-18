@@ -8,6 +8,7 @@
 //   child  → parent {type:'ready'}      |  {type:'event', id, event}  |  {type:'done', id, produced}
 import { stripWake, looseWakeGate, wakeThreshold, findWake } from '../../shared/textmatch'
 import { detectLanguage, isLang, romanianDiacritics } from '../../shared/language'
+import { confidentRussian } from './language'
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const sherpa = require('sherpa-onnx-node')
@@ -114,12 +115,14 @@ function whisperText(x: Float32Array): { text: string; lang: string } {
   return { text, lang: isLang(detected) ? detected : detectLanguage(text) }
 }
 
-/** Pinning RU/EN keeps the fast specialised path. Auto must identify all three languages before choosing it. */
-function transcribe(x: Float32Array, language: string): { text: string; lang: string } {
+/** Confident Russian phrases use GigaAM; ambiguous/foreign speech keeps multilingual detection. */
+function transcribe(x: Float32Array, language: string, russianText?: string): { text: string; lang: string } {
   if (language === 'ru' && cfg.gigaDir) return { text: gigaText(x), lang: 'ru' }
   if (language === 'en' && cfg.parakeetDir) return { text: decode(getParakeet(), x), lang: 'en' }
+  const russian = !language && cfg.gigaDir ? russianText ?? gigaText(x) : ''
+  if (russian && confidentRussian(russian)) return { text: russian, lang: 'ru' }
   const w = whisperText(x)
-  if (w.lang === 'ru' && cfg.gigaDir) return { text: gigaText(x) || w.text, lang: 'ru' }
+  if (w.lang === 'ru' && cfg.gigaDir) return { text: russian || gigaText(x) || w.text, lang: 'ru' }
   if (w.lang === 'en' && cfg.parakeetDir) return { text: decode(getParakeet(), x) || w.text, lang: 'en' }
   return w
 }
@@ -175,7 +178,10 @@ function runJob(m: Job) {
             return
           }
           if (r.hit || gateHeard) {
-            const tr = m.language === 'ru' ? { text: g, lang: 'ru' } : transcribe(x, m.language)
+            // A confirmed standalone name opens listening in any language. Do not let
+            // Whisper relabel the short name as an unrelated English word and reject it.
+            const tr = m.language === 'ru' || (r.hit && !r.command.trim())
+              ? { text: g, lang: 'ru' } : transcribe(x, m.language, g)
             raw = tr.text
             lang = tr.lang
             const multilingual = stripWake(raw, m.aliases, m.sensitivity, relaxed)
